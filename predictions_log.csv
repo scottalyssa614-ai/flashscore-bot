@@ -1,0 +1,53 @@
+Timestamp,Match,Venue,Prediction,Confidence
+2025-07-09 11:52:30,Treze vs Horizonte/CE,"Estádio Presidente Vargas, Horizonte, Brazil",Home Win,2
+2025-07-09 11:57:09,Bolívar vs Independiente Petrolero,"Estadio Hernando Siles, La Paz, Bolivia",Home Win,5
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Full Time Result (1X2),Home Win,0,⚠️ No strong signals; using probabilistic prediction,"{'Home Win': 71.7, 'Draw': 0.0, 'Away Win': 28.3}"
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Both Teams to Score (BTTS),Yes,3,Both teams concede > 1.30 goals/game; H2H shows frequent BTTS,"{'Yes': 100, 'No': 0}"
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 2.5 Goals,Over 2.5,5,Total xG 4.39 ≥ 2.86; Both teams score > 1.30 goals/game,"{'Over 2.5': 81.4, 'Under 2.5': 18.6}"
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 1.5 Goals,Over 1.5,5,Total xG 4.39 ≥ 1.82; Combined clean sheets ≥ 4 in last 10 games,"{'Over 1.5': 93.3, 'Under 1.5': 6.7}"
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 3.5 Goals,Over 3.5,7,Total xG 4.39 ≥ 3.38; One team scores > 2.08 goals/game; Both teams concede > 1.30 goals/game,"{'Over 3.5': 63.9, 'Under 3.5': 36.1}"
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Clean Sheet,No Clean Sheet,0,⚠️ No strong signals; default to No Clean Sheet,{}
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Win to Nil,No Win to Nil,0,⚠️ No strong signals; default to No Win to Nil,{}
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Double Chance,12 (Home or Away),0,⚠️ No strong signals; using probabilistic prediction,"{'1X (Home or Draw)': 71.7, 'X2 (Draw or Away)': 28.3, '12 (Home or Away)': 100.0}"
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,First to Score,Home First,3,"Home xG 2.66 > 2.08, higher CS %",{}
+2025-07-09 12:13:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Draw No Bet,Skip Draw No Bet,0,⚠️ No strong signals; skipping Draw No Bet,{}
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Full Time Result (1X2),Home Win,3,xG difference 0.93 ≥ 0.78 favors home,"{'Home Win': 71.7, 'Draw': 0.0, 'Away Win': 28.3}"
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Both Teams to Score (BTTS),Yes,6,Both teams have xG ≥ 1.56; Both teams concede > 1.30 goals/game; H2H shows frequent BTTS,"{'Yes': 96.7, 'No': 3.3}"
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 2.5 Goals,Over 2.5,5,Total xG 4.39 ≥ 2.86; Both teams score > 1.30 goals/game,"{'Over 2.5': 81.4, 'Under 2.5': 18.6}"
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 1.5 Goals,Over 1.5,3,Total xG 4.39 ≥ 1.82,"{'Over 1.5': 93.3, 'Under 1.5': 6.7}"
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 3.5 Goals,Over 3.5,7,Total xG 4.39 ≥ 3.38; One team scores > 2.08 goals/game; Both teams concede > 1.30 goals/game,"{'Over 3.5': 63.9, 'Under 3.5': 36.1}"
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Clean Sheet,No Clean Sheet,2,Both teams have xG ≥ 1.56,{}
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Win to Nil,No Win to Nil,0,⚠️ No strong signals; default to No Win to Nil,{}
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Double Chance,12 (Home or Away),0,⚠️ No strong signals; using probabilistic prediction,"{'1X (Home or Draw)': 71.7, 'X2 (Draw or Away)': 28.3, '12 (Home or Away)': 100.0}"
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,First to Score,Home First,3,"Home xG 2.66 > 1.56, higher CS %",{}
+2025-07-09 12:24:25,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Draw No Bet,Skip Draw No Bet,0,⚠️ No strong signals; skipping Draw No Bet,{}
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Full Time Result (1X2),Home Win,5,xG difference 1.23 ≥ 0.78 favors home; Home has stronger recent form,"{'Home Win': 70.3, 'Draw': 9.1, 'Away Win': 20.6}"
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Both Teams to Score (BTTS),Yes,6,Both teams have xG ≥ 1.56; Both teams concede > 1.30 goals/game; H2H shows frequent BTTS,"{'Yes': 80.6, 'No': 19.4}"
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 2.5 Goals,Over 2.5,5,Total xG 4.95 ≥ 2.86; Both teams score > 1.30 goals/game,"{'Over 2.5': 87.1, 'Under 2.5': 12.9}"
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 1.5 Goals,Over 1.5,3,Total xG 4.95 ≥ 1.82,"{'Over 1.5': 95.8, 'Under 1.5': 4.2}"
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 3.5 Goals,Over 3.5,5,Total xG 4.95 ≥ 3.38; Both teams concede > 1.30 goals/game,"{'Over 3.5': 72.8, 'Under 3.5': 27.2}"
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Clean Sheet,No Clean Sheet,2,Both teams have xG ≥ 1.56,{}
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Win to Nil,Home Win to Nil,3,"Home xG advantage 1.23 ≥ 1.04, Away xG ≤ 2.08, Home CS % ≥ 30%",{}
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Double Chance,12 (Home or Away),2,Low draw percentage or total xG 4.95 > 2.60 favors 12,"{'1X (Home or Draw)': 79.4, 'X2 (Draw or Away)': 29.7, '12 (Home or Away)': 90.9}"
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,First to Score,Home First,5,"Home xG 3.09 > 1.56, higher CS %; Home scored first in ≥2 recent H2H",{}
+2025-07-09 12:41:14,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Draw No Bet,Home Draw No Bet,3,"xG diff 1.23 ≥ 0.78, home better form",{}
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Full Time Result (1X2),Home Win,0,⚠️ No strong signals; using probabilistic prediction,"{'Home Win': 61.3, 'Draw': 9.1, 'Away Win': 29.6}"
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Both Teams to Score (BTTS),Yes,1,H2H shows frequent BTTS,"{'Yes': 62.5, 'No': 37.5}"
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 2.5 Goals,Over 2.5,0,⚠️ No strong signals; using probabilistic prediction,"{'Over 2.5': 56.8, 'Under 2.5': 43.2}"
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 1.5 Goals,Over 1.5,3,Total xG 3.29 ≥ 2.52,"{'Over 1.5': 79.5, 'Under 1.5': 20.5}"
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 3.5 Goals,Under 3.5,0,⚠️ No strong signals; using probabilistic prediction,"{'Over 3.5': 34.4, 'Under 3.5': 65.6}"
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Clean Sheet,No Clean Sheet,0,⚠️ No strong signals; default to No Clean Sheet,"{'Home Clean Sheet': 27.8, 'Away Clean Sheet': 13.4, 'No Clean Sheet': 79.4}"
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Win to Nil,No Win to Nil,0,⚠️ No strong signals; default to No Win to Nil,{}
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Double Chance,12 (Home or Away),3,"xG diff 0.73 < 1.08, home stronger form","{'1X (Home or Draw)': 70.4, 'X2 (Draw or Away)': 38.7, '12 (Home or Away)': 90.9}"
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,First to Score,Home First,2,Home scored first in ≥2 recent H2H,{}
+2025-07-09 13:07:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Draw No Bet,Skip Draw No Bet,0,⚠️ No strong signals; skipping Draw No Bet,{}
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Full Time Result (1X2),Home Win,3,xG difference 1.01 ≥ 0.78 favors home,"{'Home Win': 66.6, 'Draw': 9.1, 'Away Win': 24.3}"
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Both Teams to Score (BTTS),Yes,6,Both teams have xG ≥ 1.56; Both teams concede > 1.30 goals/game; H2H shows frequent BTTS,"{'Yes': 77.8, 'No': 22.2}"
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 2.5 Goals,Over 2.5,5,Total xG 4.55 ≥ 2.86; Both teams score > 1.30 goals/game,"{'Over 2.5': 77.5, 'Under 2.5': 22.5}"
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 1.5 Goals,Over 1.5,3,Total xG 4.55 ≥ 1.82,"{'Over 1.5': 90, 'Under 1.5': 10}"
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Over/Under 3.5 Goals,Over 3.5,7,Total xG 4.55 ≥ 3.38; One team scores > 1.95 goals/game; Both teams concede > 1.30 goals/game,"{'Over 3.5': 58.5, 'Under 3.5': 41.5}"
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Clean Sheet,No Clean Sheet,2,Both teams have xG ≥ 1.56,"{'Home Clean Sheet': 17.0, 'Away Clean Sheet': 6.2, 'No Clean Sheet': 88.4}"
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Win to Nil,No Win to Nil,0,⚠️ No strong signals; default to No Win to Nil,{}
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Double Chance,12 (Home or Away),2,Low draw percentage or total xG 4.55 > 2.60 favors 12,"{'1X (Home or Draw)': 75.7, 'X2 (Draw or Away)': 33.4, '12 (Home or Away)': 90.9}"
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,First to Score,Home First,5,"Home xG 2.78 > 1.56, higher CS %; Home scored first in ≥2 recent H2H",{}
+2025-07-09 13:11:46,Bolívar,Independiente Petrolero,Estadio Hernando Siles,Draw No Bet,Skip Draw No Bet,0,⚠️ No strong signals; skipping Draw No Bet,{}

@@ -1,0 +1,5 @@
+Timestamp,Player 1,Player 2,Tournament,Surface,Market,Prediction,Confidence,Logic,Probabilities
+2025-07-09 13:28:56,Aryna Sabalenka,Laura Siegemund,WTA Wimbledon,Grass,Match Winner,Player1 Win,2,Player 1 has stronger win %,"{'Player1 Win': 58.3, 'Player2 Win': 41.7}"
+2025-07-09 13:28:56,Aryna Sabalenka,Laura Siegemund,WTA Wimbledon,Grass,Total Games Over/Under,Under 22.5,3,Total expected games 11.31 ≤ 21.60,"{'Over 22.5': 0.0, 'Under 22.5': 100.0}"
+2025-07-09 13:28:56,Aryna Sabalenka,Laura Siegemund,WTA Wimbledon,Grass,Set Betting,Player1 2-0,2,Close games diff 0.67 favors 2-1 outcomes,"{'Player1 2-0': 39.3, 'Player1 2-1': 27.0, 'Player2 2-0': 13.5, 'Player2 2-1': 20.2}"
+2025-07-09 13:28:56,Aryna Sabalenka,Laura Siegemund,WTA Wimbledon,Grass,First Set Winner,Player1 First Set,0,⚠️ No strong signals; using probabilistic prediction,"{'Player1 First Set': 55.6, 'Player2 First Set': 44.4}"
