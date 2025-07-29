@@ -1,0 +1,15 @@
+{
+  "interval_minutes": 5,
+  "timeframe": "15min",
+  "live_monitoring": true,
+  "subscribed_users": [
+    7565367210
+  ],
+  "monitored_pairs": [
+    "EURJPY",
+    "USDJPY",
+    "EURUSD",
+    "GBPUSD",
+    "GBPJPY"
+  ]
+}

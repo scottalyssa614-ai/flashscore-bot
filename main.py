@@ -12,6 +12,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQuer
 from enum import Enum
 import threading
 import time
+from collections import deque
 
 # Configure logging
 logging.basicConfig(
@@ -21,49 +22,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 help_message = """
-📚 **Smart Forex Signal Bot v2.0 - Help**
+📚 **Enhanced Forex Signal Bot v4.0 - Help**
 
-**🆕 Enhanced Features:**
-• 💱 **Multi-Currency Support** - Analyze any major forex pair
-• 💰 **TP/SL Suggestions** - Smart profit targets & risk management
-• ⏰ **Auto Alerts** - Background scanning every 15-60 minutes
-• 📊 **Performance Tracking** - Win/loss statistics & signal history
-• 🔧 **Multiple Indicators** - RSI + EMA + MACD + S/R + Patterns
-• ⚙️ **Customizable Settings** - Adjust intervals, timeframes, and alerts
+🆕 **Key Improvements:**
+• 📈 Dynamic trend filtering with EMA200
+• 📊 Volatility-adjusted position sizing
+• 🔄 Adaptive RSI thresholds
+• 📉 Improved risk management
+• 📜 Backtesting capability
 
 **📱 Commands:**
-• `/start` - Welcome & quick access menu
-• `/analyze [PAIR]` - Manual analysis (e.g., `/analyze GBPUSD`)
-• `/performance` - View trading statistics
-• `/alerts [on/off]` - Toggle auto notifications
-• `/set_interval [15-60]` - Change scan frequency
-• `/timeframe [15min|30min|1h]` - Set analysis timeframe
-• `/config` - Show current settings
-
-**💱 Supported Currency Pairs:**
-**Majors:** EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, USDCAD, NZDUSD
-**Crosses:** EURGBP, EURJPY, GBPJPY, AUDJPY, CHFJPY, and more
-
-**Examples:**
-• `/analyze` - Analyze EURUSD (default)
-• `/analyze GBPJPY` - Analyze GBP/JPY
-• `/analyze gbpusd` - Case insensitive
-
-**🎯 Signal Types:**
-🟢 **BUY** - Oversold + Support + Bullish patterns + EMA/MACD confirmation
-🔴 **SELL** - Overbought + Resistance + Bearish patterns + EMA/MACD confirmation
-⚪ **NO SIGNAL** - Conditions don't meet 60%+ confidence threshold
-
-**💰 Trade Management:**
-• Take Profit: 20-40 pips (automatically calculated)
-• Stop Loss: 15-25 pips (risk management)
-• High confidence signals only (60%+ threshold)
-• Proper pip calculation for JPY pairs
-
-**📈 Performance Tracking:**
-All signals are logged with timestamps, entry prices, TP/SL levels, and outcomes for performance analysis.
-
-The bot focuses on quality over quantity - only the strongest setups!
+• `/start` - Activate bot
+• `/analyze [PAIR]` - Manual analysis
+• `/performance` - View statistics
+• `/backtest [PAIR]` - Run historical test
+• `/settings` - Configure parameters
+• `/help` - Show this message
 """
 
 class SignalType(Enum):
@@ -73,7 +47,6 @@ class SignalType(Enum):
 
 @dataclass
 class Candle:
-    """Represents a single candlestick"""
     timestamp: datetime
     open: float
     high: float
@@ -83,14 +56,15 @@ class Candle:
 
 @dataclass
 class TradingSignal:
-    """Represents a trading signal with TP/SL"""
     action: SignalType
     confidence: float
     rsi: float
     ema_20: float
     ema_50: float
+    ema_200: float
     macd: float
     macd_signal: float
+    atr: float
     pattern: str
     support_resistance: float
     current_price: float
@@ -98,37 +72,57 @@ class TradingSignal:
     stop_loss: float
     tp_pips: int
     sl_pips: int
+    position_size: float
     reason: str
     timestamp: datetime
+    currency_pair: str
+
+@dataclass
+class BacktestResult:
+    pair: str
+    timeframe: str
+    start_date: datetime
+    end_date: datetime
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: float
+    profit_factor: float
+    max_drawdown: float
+    pnl: float
 
 @dataclass
 class BotSettings:
-    """Bot configuration settings"""
-    interval_minutes: int = 15
+    interval_minutes: int = 10
     timeframe: str = "15min"
     tp_pips_min: int = 20
     tp_pips_max: int = 40
     sl_pips_min: int = 15
     sl_pips_max: int = 25
-    auto_alerts: bool = False
+    live_monitoring: bool = True
+    risk_per_trade: float = 0.01
+    account_size: float = 10000.0
+    rsi_overbought: int = 65
+    rsi_oversold: int = 35
     subscribed_users: Set[int] = None
+    monitored_pairs: Set[str] = None
 
     def __post_init__(self):
         if self.subscribed_users is None:
             self.subscribed_users = set()
+        if self.monitored_pairs is None:
+            self.monitored_pairs = {"EURUSD", "GBPUSD", "USDJPY", "GBPJPY", "EURJPY"}
 
 class TechnicalAnalyzer:
-    """Enhanced technical analysis with multiple indicators"""
+    """Enhanced technical analysis with additional indicators"""
 
     @staticmethod
     def calculate_rsi(prices: List[float], period: int = 14) -> float:
-        """Calculate RSI (Relative Strength Index)"""
+        """Calculate RSI with input validation"""
         if len(prices) < period + 1:
             return 50.0
 
-        prices_array = np.array(prices)
-        deltas = np.diff(prices_array)
-
+        deltas = np.diff(prices)
         gains = np.where(deltas > 0, deltas, 0)
         losses = np.where(deltas < 0, -deltas, 0)
 
@@ -139,27 +133,23 @@ class TechnicalAnalyzer:
             return 100.0
 
         rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        return round(rsi, 2)
+        return round(100 - (100 / (1 + rs)), 2)
 
     @staticmethod
     def calculate_ema(prices: List[float], period: int) -> float:
-        """Calculate Exponential Moving Average"""
+        """Calculate EMA with smoothing"""
         if len(prices) < period:
             return np.mean(prices) if prices else 0.0
 
-        prices_array = np.array(prices)
         alpha = 2 / (period + 1)
-        ema = prices_array[0]
-
-        for price in prices_array[1:]:
+        ema = prices[0]
+        for price in prices[1:]:
             ema = alpha * price + (1 - alpha) * ema
-
         return round(ema, 5)
 
     @staticmethod
     def calculate_macd(prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[float, float]:
-        """Calculate MACD and Signal line"""
+        """Calculate MACD with validation"""
         if len(prices) < slow:
             return 0.0, 0.0
 
@@ -167,373 +157,208 @@ class TechnicalAnalyzer:
         ema_slow = TechnicalAnalyzer.calculate_ema(prices, slow)
         macd_line = ema_fast - ema_slow
 
-        # For signal line, we need historical MACD values
         if len(prices) < slow + signal:
-            signal_line = macd_line
-        else:
-            macd_values = []
-            for i in range(slow, len(prices) + 1):
-                ema_f = TechnicalAnalyzer.calculate_ema(prices[:i], fast)
-                ema_s = TechnicalAnalyzer.calculate_ema(prices[:i], slow)
-                macd_values.append(ema_f - ema_s)
+            return round(macd_line, 6), round(macd_line, 6)
 
-            signal_line = TechnicalAnalyzer.calculate_ema(macd_values, signal)
+        macd_values = []
+        for i in range(slow, len(prices) + 1):
+            ema_f = TechnicalAnalyzer.calculate_ema(prices[:i], fast)
+            ema_s = TechnicalAnalyzer.calculate_ema(prices[:i], slow)
+            macd_values.append(ema_f - ema_s)
 
+        signal_line = TechnicalAnalyzer.calculate_ema(macd_values, signal)
         return round(macd_line, 6), round(signal_line, 6)
 
     @staticmethod
+    def calculate_atr(candles: List[Candle], period: int = 14) -> float:
+        """Calculate Average True Range"""
+        if len(candles) < period + 1:
+            return 0.0
+
+        true_ranges = []
+        for i in range(1, len(candles)):
+            high_low = candles[i].high - candles[i].low
+            high_close = abs(candles[i].high - candles[i-1].close)
+            low_close = abs(candles[i].low - candles[i-1].close)
+            true_ranges.append(max(high_low, high_close, low_close))
+
+        return round(np.mean(true_ranges[-period:]), 5)
+
+    @staticmethod
     def find_support_resistance(candles: List[Candle], lookback: int = 20) -> Tuple[float, float]:
-        """Find recent support and resistance levels"""
+        """Improved S/R detection with clustering"""
         if len(candles) < lookback:
             lookback = len(candles)
 
         recent_candles = candles[-lookback:]
-        highs = [c.high for c in recent_candles]
-        lows = [c.low for c in recent_candles]
-
-        resistance_levels = []
-        support_levels = []
+        price_levels = []
 
         for i in range(2, len(recent_candles) - 2):
-            # Check for resistance (local high)
             if (recent_candles[i].high > recent_candles[i-1].high and
                 recent_candles[i].high > recent_candles[i-2].high and
                 recent_candles[i].high > recent_candles[i+1].high and
                 recent_candles[i].high > recent_candles[i+2].high):
-                resistance_levels.append(recent_candles[i].high)
+                price_levels.append(recent_candles[i].high)
 
-            # Check for support (local low)
             if (recent_candles[i].low < recent_candles[i-1].low and
                 recent_candles[i].low < recent_candles[i-2].low and
                 recent_candles[i].low < recent_candles[i+1].low and
                 recent_candles[i].low < recent_candles[i+2].low):
-                support_levels.append(recent_candles[i].low)
+                price_levels.append(recent_candles[i].low)
 
-        resistance = max(resistance_levels) if resistance_levels else max(highs)
-        support = min(support_levels) if support_levels else min(lows)
+        if not price_levels:
+            highs = [c.high for c in recent_candles]
+            lows = [c.low for c in recent_candles]
+            return min(lows), max(highs)
 
-        return support, resistance
+        # Cluster nearby levels
+        price_levels.sort()
+        clusters = []
+        current_cluster = [price_levels[0]]
+
+        for price in price_levels[1:]:
+            if price - current_cluster[-1] < (max(price_levels) - min(price_levels)) * 0.02:
+                current_cluster.append(price)
+            else:
+                clusters.append(current_cluster)
+                current_cluster = [price]
+        clusters.append(current_cluster)
+
+        # Get most significant clusters
+        if len(clusters) >= 2:
+            support = np.mean(clusters[0])
+            resistance = np.mean(clusters[-1])
+            return support, resistance
+        else:
+            return min(price_levels), max(price_levels)
 
     @staticmethod
     def detect_candlestick_patterns(candles: List[Candle]) -> str:
-        """Detect candlestick patterns"""
-        if len(candles) < 2:
+        """Enhanced pattern detection"""
+        if len(candles) < 3:
             return "None"
 
         current = candles[-1]
-        previous = candles[-2]
+        prev1 = candles[-2]
+        prev2 = candles[-3]
 
+        # Define candle bodies and wicks
         current_body = abs(current.close - current.open)
-        previous_body = abs(previous.close - previous.open)
+        prev1_body = abs(prev1.close - prev1.open)
         current_range = current.high - current.low
+        lower_shadow = current.open - current.low if current.close > current.open else current.close - current.low
+        upper_shadow = current.high - current.close if current.close > current.open else current.high - current.open
 
-        # Bullish Engulfing
-        if (previous.close < previous.open and
+        # Bullish patterns
+        if (prev1.close < prev1.open and
             current.close > current.open and
-            current.open < previous.close and
-            current.close > previous.open and
-            current_body > previous_body * 1.2):
+            current.open < prev1.close and
+            current.close > prev1.open and
+            current_body > prev1_body * 1.2):
             return "Bullish Engulfing"
 
-        # Bearish Engulfing
-        if (previous.close > previous.open and
+        if (prev2.close > prev2.open and
+            prev1.close > prev1.open and
+            prev1.high > prev2.high and
+            current.close < prev1.low):
+            return "Evening Star"
+
+        if (lower_shadow > current_body * 2 and
+            upper_shadow < current_body * 0.5):
+            return "Hammer"
+
+        # Bearish patterns
+        if (prev1.close > prev1.open and
             current.close < current.open and
-            current.open > previous.close and
-            current.close < previous.open and
-            current_body > previous_body * 1.2):
+            current.open > prev1.close and
+            current.close < prev1.open and
+            current_body > prev1_body * 1.2):
             return "Bearish Engulfing"
 
-        # Doji
+        if (prev2.close < prev2.open and
+            prev1.close < prev1.open and
+            prev1.low < prev2.low and
+            current.close > prev1.high):
+            return "Morning Star"
+
+        if (upper_shadow > current_body * 2 and
+            lower_shadow < current_body * 0.5):
+            return "Shooting Star"
+
         if current_body < current_range * 0.1:
             return "Doji"
 
-        # Bullish Pin Bar
-        lower_shadow = current.open - current.low if current.close > current.open else current.close - current.low
-        upper_shadow = current.high - current.close if current.close > current.open else current.high - current.open
-        if (lower_shadow > current_body * 2 and
-            upper_shadow < current_body * 0.5 and
-            current_range > 0):
-            return "Bullish Pin Bar"
-
-        # Bearish Pin Bar
-        if (upper_shadow > current_body * 2 and
-            lower_shadow < current_body * 0.5 and
-            current_range > 0):
-            return "Bearish Pin Bar"
-
         return "None"
 
-class CurrencyPairValidator:
-    """Validates and formats currency pairs"""
-
-    # Major and minor forex pairs
-    VALID_PAIRS = {
-        # Major pairs
-        'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD',
-        # Cross pairs
-        'EURGBP', 'EURJPY', 'EURCHF', 'EURAUD', 'EURCAD', 'EURNZD',
-        'GBPJPY', 'GBPCHF', 'GBPAUD', 'GBPCAD', 'GBPNZD',
-        'AUDJPY', 'AUDCHF', 'AUDCAD', 'AUDNZD',
-        'CADJPY', 'CADCHF', 'NZDJPY', 'NZDCHF', 'NZDCAD',
-        'CHFJPY', 'JPYSGD'
-    }
-
-    @classmethod
-    def validate_and_format(cls, pair_input: str) -> Tuple[bool, str, str]:
-        """
-        Validate and format currency pair
-        Returns: (is_valid, formatted_pair_for_api, display_pair)
-        """
-        if not pair_input:
-            return True, "EUR/USD", "EURUSD"
-
-        # Clean input
-        cleaned = pair_input.upper().replace('/', '').replace('-', '').replace('_', '')
-
-        # Check if it's a valid pair
-        if cleaned in cls.VALID_PAIRS:
-            # Format for API (with slash)
-            api_format = f"{cleaned[:3]}/{cleaned[3:]}"
-            return True, api_format, cleaned
-
-        # Try common variations
-        if len(cleaned) == 6:
-            reversed_pair = cleaned[3:] + cleaned[:3]
-            if reversed_pair in cls.VALID_PAIRS:
-                api_format = f"{reversed_pair[:3]}/{reversed_pair[3:]}"
-                return True, api_format, reversed_pair
-
-        return False, "", cleaned
-
-class ForexDataProvider:
-    """Handles fetching forex data from external APIs"""
-
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key
-        self.base_url = "https://api.twelvedata.com"
-
-    async def get_candles(self, symbol: str = "EUR/USD", interval: str = "15min", 
-                         count: int = 100) -> List[Candle]:
-        """Fetch candlestick data from TwelveData API"""
-        try:
-            params = {
-                "symbol": symbol,
-                "interval": interval,
-                "outputsize": count,
-                "format": "JSON"
-            }
-
-            if self.api_key:
-                params["apikey"] = self.api_key
-
-            url = f"{self.base_url}/time_series"
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-
-            data = response.json()
-
-            if "values" not in data:
-                logger.warning(f"No values in API response, using mock data")
-                return self._get_mock_data()
-
-            candles = []
-            for item in reversed(data["values"]):
-                try:
-                    candle = Candle(
-                        timestamp=datetime.strptime(item["datetime"], "%Y-%m-%d %H:%M:%S"),
-                        open=float(item["open"]),
-                        high=float(item["high"]),
-                        low=float(item["low"]),
-                        close=float(item["close"]),
-                        volume=float(item.get("volume", 0))
-                    )
-                    candles.append(candle)
-                except (ValueError, KeyError) as e:
-                    logger.warning(f"Error parsing candle data: {e}")
-                    continue
-
-            return candles[-count:] if candles else self._get_mock_data(symbol)
-
-        except Exception as e:
-            logger.error(f"Error fetching data: {e}")
-            return self._get_mock_data(symbol)
-
-    def _get_mock_data(self, symbol: str = "EUR/USD") -> List[Candle]:
-        """Generate realistic mock data"""
-        logger.info("Using mock data")
-        candles = []
-        base_price = 1.0850
-        base_time = datetime.now() - timedelta(hours=25)
-
-        for i in range(100):
-            change = np.random.normal(0, 0.0005)
-            open_price = base_price + change
-            high_price = open_price + abs(np.random.normal(0, 0.0003))
-            low_price = open_price - abs(np.random.normal(0, 0.0003))
-            close_price = open_price + np.random.normal(0, 0.0002)
-
-            high_price = max(high_price, open_price, close_price)
-            low_price = min(low_price, open_price, close_price)
-
-            candle = Candle(
-                timestamp=base_time + timedelta(minutes=15 * i),
-                open=round(open_price, 5),
-                high=round(high_price, 5),
-                low=round(low_price, 5),
-                close=round(close_price, 5),
-                volume=np.random.uniform(1000, 5000)
-            )
-            candles.append(candle)
-            base_price = close_price
-
-        return candles
-
-class PerformanceTracker:
-    """Tracks and logs trading performance"""
-
-    def __init__(self, log_file: str = "performance_log.json"):
-        self.log_file = log_file
-        self.signals_log = self._load_log()
-
-    def _load_log(self) -> List[Dict]:
-        """Load existing performance log"""
-        try:
-            if os.path.exists(self.log_file):
-                with open(self.log_file, 'r') as f:
-                    return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading performance log: {e}")
-        return []
-
-    def _save_log(self):
-        """Save performance log to file"""
-        try:
-            with open(self.log_file, 'w') as f:
-                json.dump(self.signals_log, f, indent=2, default=str)
-        except Exception as e:
-            logger.error(f"Error saving performance log: {e}")
-
-    def log_signal(self, signal: TradingSignal):
-        """Log a new trading signal"""
-        if signal.action == SignalType.NONE:
-            return
-
-        log_entry = {
-            "timestamp": signal.timestamp.isoformat(),
-            "action": signal.action.value,
-            "entry_price": signal.current_price,
-            "take_profit": signal.take_profit,
-            "stop_loss": signal.stop_loss,
-            "tp_pips": signal.tp_pips,
-            "sl_pips": signal.sl_pips,
-            "rsi": signal.rsi,
-            "pattern": signal.pattern,
-            "confidence": signal.confidence,
-            "status": "OPEN"  # OPEN, TP_HIT, SL_HIT
-        }
-
-        self.signals_log.append(log_entry)
-        self._save_log()
-        logger.info(f"Logged {signal.action.value} signal at {signal.current_price}")
-
-    def get_stats(self) -> Dict:
-        """Calculate performance statistics"""
-        if not self.signals_log:
-            return {
-                "total_signals": 0,
-                "buy_signals": 0,
-                "sell_signals": 0,
-                "avg_confidence": 0,
-                "last_signal": "None"
-            }
-
-        buy_count = sum(1 for s in self.signals_log if s["action"] == "BUY")
-        sell_count = sum(1 for s in self.signals_log if s["action"] == "SELL")
-        avg_confidence = np.mean([s["confidence"] for s in self.signals_log])
-
-        last_signal = self.signals_log[-1] if self.signals_log else None
-        last_signal_time = ""
-        if last_signal:
-            last_time = datetime.fromisoformat(last_signal["timestamp"])
-            last_signal_time = last_time.strftime("%Y-%m-%d %H:%M")
-
-        return {
-            "total_signals": len(self.signals_log),
-            "buy_signals": buy_count,
-            "sell_signals": sell_count,
-            "avg_confidence": round(avg_confidence, 1),
-            "last_signal": f"{last_signal['action']} at {last_signal_time}" if last_signal else "None"
-        }
-
 class SignalGenerator:
-    """Enhanced signal generator with multiple indicators and TP/SL calculation"""
+    """Enhanced signal generation with trend filtering and volatility adjustment"""
 
     def __init__(self, settings: BotSettings):
         self.analyzer = TechnicalAnalyzer()
         self.settings = settings
 
-    def calculate_tp_sl(self, action: SignalType, entry_price: float, currency_pair: str) -> Tuple[float, float, int, int]:
-        """Calculate Take Profit and Stop Loss levels"""
-        if action == SignalType.NONE:
-            return 0.0, 0.0, 0, 0
+    def calculate_position_size(self, atr: float, entry: float, stop_loss: float) -> float:
+        """Calculate position size based on volatility and risk"""
+        if atr == 0:
+            return 0.0
 
-        # Calculate pip value (for EUR/USD, 1 pip = 0.0001)
-        pip_value = 0.0001
+        risk_amount = self.settings.account_size * self.settings.risk_per_trade
+        risk_per_share = abs(entry - stop_loss)
 
-        # Random TP/SL within configured ranges
-        tp_pips = np.random.randint(self.settings.tp_pips_min, self.settings.tp_pips_max + 1)
-        sl_pips = np.random.randint(self.settings.sl_pips_min, self.settings.sl_pips_max + 1)
+        if risk_per_share == 0:
+            return 0.0
 
-        if action == SignalType.BUY:
-            take_profit = entry_price + (tp_pips * pip_value)
-            stop_loss = entry_price - (sl_pips * pip_value)
-        else:  # SELL
-            take_profit = entry_price - (tp_pips * pip_value)
-            stop_loss = entry_price + (sl_pips * pip_value)
+        position_size = risk_amount / risk_per_share
+        return round(position_size, 2)
 
-        return round(take_profit, 5), round(stop_loss, 5), tp_pips, sl_pips
+    def generate_signal(self, candles: List[Candle], currency_pair: str) -> TradingSignal:
+        """Generate trading signal with enhanced logic"""
+        if len(candles) < 200:
+            return self._create_no_signal(candles, currency_pair, "Insufficient data")
 
-    def generate_signal(self, candles: List[Candle], currency_pair: str = "EUR/USD") -> TradingSignal:
-        """Generate enhanced trading signal with multiple indicators for any currency pair"""
-        if len(candles) < 50:
-            return self._create_no_signal(candles, currency_pair, "Insufficient data for analysis")
+        closes = [c.close for c in candles]
+        current_price = closes[-1]
 
         # Calculate all indicators
-        closes = [c.close for c in candles]
         rsi = self.analyzer.calculate_rsi(closes)
         ema_20 = self.analyzer.calculate_ema(closes, 20)
         ema_50 = self.analyzer.calculate_ema(closes, 50)
+        ema_200 = self.analyzer.calculate_ema(closes, 200)
         macd, macd_signal = self.analyzer.calculate_macd(closes)
-        support, resistance = self.analyzer.find_support_resistance(candles)
+        atr = self.analyzer.calculate_atr(candles)
         pattern = self.analyzer.detect_candlestick_patterns(candles)
-        current_price = candles[-1].close
+        support, resistance = self.analyzer.find_support_resistance(candles)
 
-        # Determine proximity to S/R levels
-        support_distance = abs(current_price - support) / current_price
-        resistance_distance = abs(current_price - resistance) / current_price
+        # Determine trend direction
+        is_uptrend = current_price > ema_200
+        is_downtrend = current_price < ema_200
 
-        # Enhanced signal generation logic
-        signal_strength = 0
-        action = SignalType.NONE
-        conditions = []
+        # Dynamic RSI thresholds based on volatility
+        rsi_range = self.settings.rsi_overbought - self.settings.rsi_oversold
+        volatility_adjustment = (atr / current_price) * 1000
+        adjusted_rsi_oversold = self.settings.rsi_oversold + (volatility_adjustment * 0.5)
+        adjusted_rsi_overbought = self.settings.rsi_overbought - (volatility_adjustment * 0.5)
+
+        # Signal scoring
+        buy_score = 0
+        sell_score = 0
+        buy_conditions = []
+        sell_conditions = []
 
         # BUY conditions
-        buy_score = 0
-        buy_conditions = []
-
-        if rsi < 35:
-            buy_conditions.append("RSI Oversold")
+        if rsi < adjusted_rsi_oversold:
+            buy_conditions.append(f"RSI {rsi:.1f} (Adj)")
             buy_score += 25
 
-        if support_distance < 0.002:
+        if current_price > support and (current_price - support) < (2 * atr):
             buy_conditions.append("Near Support")
             buy_score += 20
 
-        if pattern in ["Bullish Engulfing", "Bullish Pin Bar"]:
-            buy_conditions.append(f"Bullish Pattern ({pattern})")
+        if pattern in ["Bullish Engulfing", "Hammer", "Morning Star"]:
+            buy_conditions.append(pattern)
             buy_score += 25
 
-        if ema_20 > ema_50:
+        if ema_20 > ema_50 and is_uptrend:
             buy_conditions.append("EMA Bullish")
             buy_score += 15
 
@@ -542,22 +367,19 @@ class SignalGenerator:
             buy_score += 15
 
         # SELL conditions
-        sell_score = 0
-        sell_conditions = []
-
-        if rsi > 65:
-            sell_conditions.append("RSI Overbought")
+        if rsi > adjusted_rsi_overbought:
+            sell_conditions.append(f"RSI {rsi:.1f} (Adj)")
             sell_score += 25
 
-        if resistance_distance < 0.002:
+        if current_price < resistance and (resistance - current_price) < (2 * atr):
             sell_conditions.append("Near Resistance")
             sell_score += 20
 
-        if pattern in ["Bearish Engulfing", "Bearish Pin Bar"]:
-            sell_conditions.append(f"Bearish Pattern ({pattern})")
+        if pattern in ["Bearish Engulfing", "Shooting Star", "Evening Star"]:
+            sell_conditions.append(pattern)
             sell_score += 25
 
-        if ema_20 < ema_50:
+        if ema_20 < ema_50 and is_downtrend:
             sell_conditions.append("EMA Bearish")
             sell_score += 15
 
@@ -565,39 +387,42 @@ class SignalGenerator:
             sell_conditions.append("MACD Bearish")
             sell_score += 15
 
-        # Determine final signal (require minimum 60 confidence and 3+ conditions)
+        # Determine final signal
         min_confidence = 60
         min_conditions = 3
 
         if (len(buy_conditions) >= min_conditions and 
             buy_score >= min_confidence and 
-            sell_score < 30):  # Avoid conflicting signals
+            sell_score < 40):
             action = SignalType.BUY
-            signal_strength = min(buy_score, 100)
-            conditions = buy_conditions
+            confidence = min(buy_score, 95)  # Cap at 95% to avoid overconfidence
             key_level = support
+            conditions = buy_conditions
         elif (len(sell_conditions) >= min_conditions and 
               sell_score >= min_confidence and 
-              buy_score < 30):
+              buy_score < 40):
             action = SignalType.SELL
-            signal_strength = min(sell_score, 100)
-            conditions = sell_conditions
+            confidence = min(sell_score, 95)
             key_level = resistance
+            conditions = sell_conditions
         else:
             return self._create_no_signal(candles, currency_pair,
                 f"Conditions not met (Buy: {buy_score}%, Sell: {sell_score}%)")
 
         # Calculate TP/SL
-        tp, sl, tp_pips, sl_pips = self.calculate_tp_sl(action, current_price, currency_pair)
+        tp, sl, tp_pips, sl_pips = self._calculate_tp_sl(action, current_price, currency_pair, atr)
+        position_size = self.calculate_position_size(atr, current_price, sl)
 
         return TradingSignal(
             action=action,
-            confidence=signal_strength,
+            confidence=confidence,
             rsi=rsi,
             ema_20=ema_20,
             ema_50=ema_50,
+            ema_200=ema_200,
             macd=macd,
             macd_signal=macd_signal,
+            atr=atr,
             pattern=pattern,
             support_resistance=key_level,
             current_price=current_price,
@@ -605,12 +430,38 @@ class SignalGenerator:
             stop_loss=sl,
             tp_pips=tp_pips,
             sl_pips=sl_pips,
+            position_size=position_size,
             reason=" + ".join(conditions),
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
+            currency_pair=currency_pair
         )
 
+    def _calculate_tp_sl(self, action: SignalType, entry_price: float, 
+                        currency_pair: str, atr: float) -> Tuple[float, float, int, int]:
+        """Enhanced TP/SL calculation with volatility adjustment"""
+        pip_value = 0.01 if 'JPY' in currency_pair else 0.0001
+
+        # Base TP/SL from settings
+        base_tp_pips = np.random.randint(self.settings.tp_pips_min, self.settings.tp_pips_max + 1)
+        base_sl_pips = np.random.randint(self.settings.sl_pips_min, self.settings.sl_pips_max + 1)
+
+        # Adjust based on volatility (ATR)
+        atr_pips = atr / pip_value
+        tp_pips = min(int(base_tp_pips + (atr_pips * 0.3)), 100)  # Cap at 100 pips
+        sl_pips = min(int(base_sl_pips + (atr_pips * 0.2)), 80)   # Cap at 80 pips
+
+        if action == SignalType.BUY:
+            take_profit = entry_price + (tp_pips * pip_value)
+            stop_loss = entry_price - (sl_pips * pip_value)
+        else:  # SELL
+            take_profit = entry_price - (tp_pips * pip_value)
+            stop_loss = entry_price + (sl_pips * pip_value)
+
+        decimals = 3 if 'JPY' in currency_pair else 5
+        return round(take_profit, decimals), round(stop_loss, decimals), tp_pips, sl_pips
+
     def _create_no_signal(self, candles: List[Candle], currency_pair: str, reason: str) -> TradingSignal:
-        """Create a NO SIGNAL response"""
+        """Create NO_SIGNAL response"""
         closes = [c.close for c in candles] if candles else [0]
         current_price = closes[-1] if closes else 0
 
@@ -620,8 +471,10 @@ class SignalGenerator:
             rsi=self.analyzer.calculate_rsi(closes) if len(closes) > 14 else 50,
             ema_20=0,
             ema_50=0,
+            ema_200=0,
             macd=0,
             macd_signal=0,
+            atr=0,
             pattern="None",
             support_resistance=0,
             current_price=current_price,
@@ -629,500 +482,141 @@ class SignalGenerator:
             stop_loss=0,
             tp_pips=0,
             sl_pips=0,
+            position_size=0,
             reason=reason,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
+            currency_pair=currency_pair
         )
 
-class ForexTelegramBot:
-    """Enhanced Telegram bot with auto alerts and performance tracking"""
+class EnhancedForexBot(LiveForexTelegramBot):
+    """Enhanced version with backtesting and improved features"""
 
-    def __init__(self, telegram_token: str, api_key: Optional[str] = None):
-        self.telegram_token = telegram_token
-        self.data_provider = ForexDataProvider(api_key)
-        self.settings = BotSettings()
-        self.signal_generator = SignalGenerator(self.settings)
-        self.performance_tracker = PerformanceTracker()
-        self.last_signal_action = SignalType.NONE
-        self.auto_alert_task = None
-        self.application = None
-
-        # Load settings
-        self._load_settings()
-
-    def _load_settings(self):
-        """Load bot settings from file"""
-        try:
-            if os.path.exists("bot_settings.json"):
-                with open("bot_settings.json", 'r') as f:
-                    data = json.load(f)
-                    self.settings.interval_minutes = data.get("interval_minutes", 15)
-                    self.settings.timeframe = data.get("timeframe", "15min")
-                    self.settings.auto_alerts = data.get("auto_alerts", False)
-                    self.settings.subscribed_users = set(data.get("subscribed_users", []))
-        except Exception as e:
-            logger.error(f"Error loading settings: {e}")
-
-    def _save_settings(self):
-        """Save bot settings to file"""
-        try:
-            data = {
-                "interval_minutes": self.settings.interval_minutes,
-                "timeframe": self.settings.timeframe,
-                "auto_alerts": self.settings.auto_alerts,
-                "subscribed_users": list(self.settings.subscribed_users)
-            }
-            with open("bot_settings.json", 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving settings: {e}")
-
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enhanced start command"""
-        user_id = update.effective_user.id
-        self.settings.subscribed_users.add(user_id)
-        self._save_settings()
-
-        keyboard = [
-            [InlineKeyboardButton("📊 Analyze Now", callback_data="analyze")],
-            [InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
-            [InlineKeyboardButton("📈 Performance", callback_data="performance")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        welcome_message = """
-🤖 **Welcome to Smart Forex Signal Bot v2.0!**
-
-🆕 **New Features:**
-• 💰 Take Profit & Stop Loss suggestions
-• ⏰ Auto alerts every 15-30 minutes
-• 📊 Performance tracking & statistics
-• 🔧 Enhanced indicators (EMA, MACD)
-• ⚙️ Customizable settings
-
-**Available Commands:**
-• `/analyze` - Get current market analysis
-• `/performance` - View trading statistics
-• `/set_interval [minutes]` - Set auto-scan interval
-• `/config` - Show current settings
-• `/alerts [on/off]` - Toggle auto alerts
-
-**Enhanced Analysis:**
-✅ RSI + EMA 20/50 + MACD + S/R + Patterns
-✅ Smart TP/SL calculation (20-40 pips TP, 15-25 pips SL)
-✅ High-confidence signals only (60%+ threshold)
-
-Choose an option below or type a command!
-        """
-        await update.message.reply_text(welcome_message, 
-                                      parse_mode='Markdown',
-                                      reply_markup=reply_markup)
-
-    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle inline button callbacks"""
-        query = update.callback_query
-        await query.answer()
-
-        if query.data == "analyze":
-            await self._send_analysis(query.message.chat_id, context, "EURUSD", "EUR/USD")
-        elif query.data == "settings":
-            await self._send_settings(query.message.chat_id, context)
-        elif query.data == "performance":
-            await self._send_performance(query.message.chat_id, context)
-
-    async def analyze_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enhanced analyze command with currency pair support"""
-        # Extract currency pair from command arguments
-        currency_pair = "EURUSD"  # Default
-        if context.args and len(context.args) > 0:
-            user_input = context.args[0]
-            is_valid, api_format, display_format = CurrencyPairValidator.validate_and_format(user_input)
-
-            if not is_valid:
-                await update.message.reply_text(
-                    f"❌ Invalid currency pair: `{user_input}`\n\n"
-                    "**Supported pairs:** EURUSD, GBPUSD, USDJPY, GBPJPY, EURJPY, AUDUSD, etc.\n"
-                    "**Usage:** `/analyze GBPUSD` or just `/analyze` for EURUSD",
-                    parse_mode='Markdown'
-                )
-                return
-
-            currency_pair = display_format
-            api_pair = api_format
-        else:
-            api_pair = "EUR/USD"
-
-        await self._send_analysis(update.message.chat_id, context, currency_pair, api_pair)
-
-    async def _send_analysis(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, 
-                           currency_pair: str = "EURUSD", api_pair: str = "EUR/USD"):
-        """Send market analysis for specified currency pair"""
-        await context.bot.send_message(chat_id, f"🔍 Analyzing {currency_pair}...")
-
-        try:
-            candles = await self.data_provider.get_candles(
-                symbol=api_pair,
-                interval=self.settings.timeframe,
-                count=100
+    async def backtest_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle backtest command"""
+        if not context.args:
+            await update.message.reply_text(
+                "Usage: /backtest [PAIR] [DAYS]\n"
+                "Example: /backtest EURUSD 30"
             )
+            return
 
-            if not candles:
-                await context.bot.send_message(chat_id, f"❌ Could not fetch data for {currency_pair}.")
-                return
+        currency_pair = context.args[0].upper()
+        days = int(context.args[1]) if len(context.args) > 1 else 30
 
-            signal = self.signal_generator.generate_signal(candles, api_pair)
+        await update.message.reply_text(f"⏳ Running backtest for {currency_pair} over {days} days...")
 
-            # Log signal if it's not NONE
+        try:
+            result = await self.run_backtest(currency_pair, days)
+            await self._send_backtest_results(update.message.chat_id, context, result)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Backtest failed: {str(e)}")
+
+    async def run_backtest(self, currency_pair: str, days: int) -> BacktestResult:
+        """Execute backtest on historical data"""
+        is_valid, api_format, display_format = CurrencyPairValidator.validate_and_format(currency_pair)
+        if not is_valid:
+            raise ValueError(f"Invalid currency pair: {currency_pair}")
+
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+
+        # Fetch historical data (implementation depends on your data provider)
+        candles = await self._fetch_historical_data(api_format, start_date, end_date)
+
+        if not candles or len(candles) < 200:
+            raise ValueError("Insufficient historical data")
+
+        # Run backtest
+        trades = []
+        equity = self.settings.account_size
+        max_drawdown = 0
+        peak_equity = equity
+
+        for i in range(200, len(candles)):
+            window = candles[i-200:i]
+            signal = self.signal_generator.generate_signal(window, currency_pair)
+
             if signal.action != SignalType.NONE:
-                self.performance_tracker.log_signal(signal)
+                # Simulate trade
+                entry_price = signal.current_price
+                exit_price = candles[i].close
 
-            message = self._format_signal_message(signal, currency_pair)
-            await context.bot.send_message(chat_id, message, parse_mode='Markdown')
+                if signal.action == SignalType.BUY:
+                    pnl = (exit_price - entry_price) * signal.position_size
+                else:
+                    pnl = (entry_price - exit_price) * signal.position_size
 
-        except Exception as e:
-            logger.error(f"Error in analysis: {e}")
-            await context.bot.send_message(chat_id, f"❌ Analysis failed for {currency_pair}. Please try again.")
+                equity += pnl
+                trades.append(pnl)
 
-    def _format_signal_message(self, signal: TradingSignal, currency_pair: str) -> str:
-        """Format signal into readable message with currency pair"""
-        # Determine decimal places for display
-        decimals = 3 if 'JPY' in currency_pair else 5
+                # Update drawdown
+                if equity > peak_equity:
+                    peak_equity = equity
+                drawdown = (peak_equity - equity) / peak_equity
+                if drawdown > max_drawdown:
+                    max_drawdown = drawdown
 
-        if signal.action == SignalType.BUY:
-            emoji = "🟢"
-            message = f"""📈 **Pair:** {currency_pair}
-{emoji} **BUY SIGNAL DETECTED**
+        # Calculate metrics
+        winning_trades = sum(1 for pnl in trades if pnl > 0)
+        losing_trades = sum(1 for pnl in trades if pnl < 0)
+        total_trades = len(trades)
+        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+        gross_profit = sum(pnl for pnl in trades if pnl > 0)
+        gross_loss = abs(sum(pnl for pnl in trades if pnl < 0))
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf')
+        total_pnl = equity - self.settings.account_size
 
-💰 **Trade Setup:**
-• Entry: `{signal.current_price:.{decimals}f}`
-• 🎯 Take Profit: `{signal.take_profit:.{decimals}f}` (+{signal.tp_pips} pips)
-• 🛑 Stop Loss: `{signal.stop_loss:.{decimals}f}` (-{signal.sl_pips} pips)
+        return BacktestResult(
+            pair=currency_pair,
+            timeframe=self.settings.timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            total_trades=total_trades,
+            winning_trades=winning_trades,
+            losing_trades=losing_trades,
+            win_rate=round(win_rate, 1),
+            profit_factor=round(profit_factor, 2),
+            max_drawdown=round(max_drawdown * 100, 1),
+            pnl=round(total_pnl, 2)
 
-📊 **Technical Analysis:**
-• RSI: `{signal.rsi:.1f}`
-• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
-• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
-• Pattern: `{signal.pattern}`
-• Support: `{signal.support_resistance:.{decimals}f}`
-• Confidence: `{signal.confidence:.0f}%`
-
-📈 **Reason:** {signal.reason}
-
-⏰ Timeframe: `{self.settings.timeframe}`
-🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`"""
-
-        elif signal.action == SignalType.SELL:
-            emoji = "🔴"
-            message = f"""📈 **Pair:** {currency_pair}
-{emoji} **SELL SIGNAL DETECTED**
-
-💰 **Trade Setup:**
-• Entry: `{signal.current_price:.{decimals}f}`
-• 🎯 Take Profit: `{signal.take_profit:.{decimals}f}` (+{signal.tp_pips} pips)
-• 🛑 Stop Loss: `{signal.stop_loss:.{decimals}f}` (-{signal.sl_pips} pips)
-
-📊 **Technical Analysis:**
-• RSI: `{signal.rsi:.1f}`
-• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
-• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
-• Pattern: `{signal.pattern}`
-• Resistance: `{signal.support_resistance:.{decimals}f}`
-• Confidence: `{signal.confidence:.0f}%`
-
-📉 **Reason:** {signal.reason}
-
-⏰ Timeframe: `{self.settings.timeframe}`
-🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`"""
-
-        else:
-            emoji = "⚪"
-            message = f"""📈 **Pair:** {currency_pair}
-{emoji} **NO SIGNAL**
-
-📊 **Current Analysis:**
-• RSI: `{signal.rsi:.1f}`
-• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
-• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
-• Pattern: `{signal.pattern}`
-• Current Price: `{signal.current_price:.{decimals}f}`
-
-💡 **Status:** {signal.reason}
-
-⏰ Timeframe: `{self.settings.timeframe}`
-🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
-
-💡 Try again later when conditions align better."""
-
-        return message
-
-    async def performance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show performance statistics"""
-        await self._send_performance(update.message.chat_id, context)
-
-    async def _send_performance(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-        """Send performance statistics"""
-        stats = self.performance_tracker.get_stats()
-
+    async def _send_backtest_results(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, 
+                                   result: BacktestResult):
+        """Format and send backtest results"""
         message = f"""
-📈 **Performance Statistics**
+📊 **Backtest Results - {result.pair}**
 
-📊 **Signal Summary:**
-• Total Signals: `{stats['total_signals']}`
-• Buy Signals: `{stats['buy_signals']}`
-• Sell Signals: `{stats['sell_signals']}`
-• Avg Confidence: `{stats['avg_confidence']}%`
+⏳ **Period:** {result.start_date.strftime('%Y-%m-%d')} to {result.end_date.strftime('%Y-%m-%d')}
+⏱️ **Timeframe:** {result.timeframe}
 
-🕐 **Last Signal:** {stats['last_signal']}
+📈 **Performance Metrics:**
+• Total Trades: `{result.total_trades}`
+• Winning Trades: `{result.winning_trades}`
+• Losing Trades: `{result.losing_trades}`
+• Win Rate: `{result.win_rate}%`
+• Profit Factor: `{result.profit_factor}`
+• Max Drawdown: `{result.max_drawdown}%`
+• P&L: `${result.pnl:,.2f}`
 
-⚙️ **Current Settings:**
-• Scan Interval: `{self.settings.interval_minutes} minutes`
-• Timeframe: `{self.settings.timeframe}`
-• Auto Alerts: `{'ON' if self.settings.auto_alerts else 'OFF'}`
-• TP Range: `{self.settings.tp_pips_min}-{self.settings.tp_pips_max} pips`
-• SL Range: `{self.settings.sl_pips_min}-{self.settings.sl_pips_max} pips`
-
-💡 Performance tracking helps you evaluate signal quality over time.
-        """
-
+💡 **Interpretation:**
+- Profit factor > 1.5 suggests good strategy
+- Win rate > 55% is generally positive
+- Drawdown < 20% is acceptable
+"""
         await context.bot.send_message(chat_id, message, parse_mode='Markdown')
-
-    async def _send_settings(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-        """Send current settings"""
-        message = f"""
-⚙️ **Bot Configuration**
-
-**Current Settings:**
-• Scan Interval: `{self.settings.interval_minutes} minutes`
-• Timeframe: `{self.settings.timeframe}`
-• Auto Alerts: `{'✅ ON' if self.settings.auto_alerts else '❌ OFF'}`
-• Take Profit: `{self.settings.tp_pips_min}-{self.settings.tp_pips_max} pips`
-• Stop Loss: `{self.settings.sl_pips_min}-{self.settings.sl_pips_max} pips`
-
-**Available Commands:**
-• `/set_interval [15-60]` - Change scan interval
-• `/timeframe [15min|30min|1h]` - Change timeframe
-• `/alerts [on|off]` - Toggle auto alerts
-• `/config` - Show this settings page
-
-**Examples:**
-• `/set_interval 30` - Scan every 30 minutes
-• `/alerts on` - Enable auto notifications
-• `/timeframe 30min` - Use 30-minute candles
-        """
-
-        await context.bot.send_message(chat_id, message, parse_mode='Markdown')
-
-    async def set_interval_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set scanning interval"""
-        if not context.args:
-            await update.message.reply_text(
-                f"Current interval: `{self.settings.interval_minutes} minutes`\n"
-                "Usage: `/set_interval [15-60]`",
-                parse_mode='Markdown'
-            )
-            return
-
-        try:
-            new_interval = int(context.args[0])
-            if 15 <= new_interval <= 60:
-                self.settings.interval_minutes = new_interval
-                self._save_settings()
-
-                # Restart auto alerts if enabled
-                if self.settings.auto_alerts:
-                    await self._restart_auto_alerts()
-
-                await update.message.reply_text(
-                    f"✅ Scan interval updated to `{new_interval} minutes`",
-                    parse_mode='Markdown'
-                )
-            else:
-                await update.message.reply_text("❌ Interval must be between 15-60 minutes")
-        except ValueError:
-            await update.message.reply_text("❌ Please provide a valid number")
-
-    async def timeframe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set analysis timeframe"""
-        if not context.args:
-            await update.message.reply_text(
-                f"Current timeframe: `{self.settings.timeframe}`\n"
-                "Usage: `/timeframe [15min|30min|1h]`",
-                parse_mode='Markdown'
-            )
-            return
-
-        new_timeframe = context.args[0].lower()
-        valid_timeframes = ["15min", "30min", "1h"]
-
-        if new_timeframe in valid_timeframes:
-            self.settings.timeframe = new_timeframe
-            self._save_settings()
-            await update.message.reply_text(
-                f"✅ Timeframe updated to `{new_timeframe}`",
-                parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ Invalid timeframe. Use: {', '.join(valid_timeframes)}"
-            )
-
-    async def alerts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Toggle auto alerts"""
-        if not context.args:
-            status = "ON" if self.settings.auto_alerts else "OFF"
-            await update.message.reply_text(
-                f"Auto alerts: `{status}`\n"
-                "Usage: `/alerts [on|off]`",
-                parse_mode='Markdown'
-            )
-            return
-
-        setting = context.args[0].lower()
-        user_id = update.effective_user.id
-
-        if setting == "on":
-            self.settings.auto_alerts = True
-            self.settings.subscribed_users.add(user_id)
-            self._save_settings()
-            await self._start_auto_alerts()
-            await update.message.reply_text("✅ Auto alerts enabled! You'll receive notifications when new signals are detected.")
-        elif setting == "off":
-            if user_id in self.settings.subscribed_users:
-                self.settings.subscribed_users.remove(user_id)
-
-            # If no users subscribed, disable auto alerts
-            if not self.settings.subscribed_users:
-                self.settings.auto_alerts = False
-                await self._stop_auto_alerts()
-
-            self._save_settings()
-            await update.message.reply_text("❌ Auto alerts disabled for you.")
-        else:
-            await update.message.reply_text("❌ Use 'on' or 'off' with the alerts command")
-
-    async def config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show configuration"""
-        await self._send_settings(update.message.chat_id, context)
-
-    async def _start_auto_alerts(self):
-        """Start automatic alert system"""
-        if self.auto_alert_task is None or self.auto_alert_task.done():
-            self.auto_alert_task = asyncio.create_task(self._auto_alert_loop())
-            logger.info("Auto alerts started")
-
-    async def _stop_auto_alerts(self):
-        """Stop automatic alert system"""
-        if self.auto_alert_task and not self.auto_alert_task.done():
-            self.auto_alert_task.cancel()
-            logger.info("Auto alerts stopped")
-
-    async def _restart_auto_alerts(self):
-        """Restart auto alerts with new interval"""
-        if self.settings.auto_alerts:
-            await self._stop_auto_alerts()
-            await self._start_auto_alerts()
-
-    async def _auto_alert_loop(self):
-        """Background task for automatic alerts"""
-        while self.settings.auto_alerts and self.settings.subscribed_users:
-            try:
-                # Analyze market
-                candles = await self.data_provider.get_candles(
-                    symbol="EUR/USD",
-                    interval=self.settings.timeframe,
-                    count=100
-                )
-
-                if candles:
-                    signal = self.signal_generator.generate_signal(candles, "EUR/USD")
-
-                    # Send alert only if signal changed and is not NONE
-                    if (signal.action != self.last_signal_action and 
-                        signal.action != SignalType.NONE):
-
-                        self.performance_tracker.log_signal(signal)
-                        message = f"🚨 **AUTO ALERT**\n\n{self._format_signal_message(signal, 'EURUSD')}"
-
-                        # Send to all subscribed users
-                        for user_id in self.settings.subscribed_users.copy():
-                            try:
-                                await self.application.bot.send_message(
-                                    user_id, message, parse_mode='Markdown'
-                                )
-                            except Exception as e:
-                                logger.error(f"Failed to send alert to user {user_id}: {e}")
-                                # Remove user if chat not found
-                                if "chat not found" in str(e).lower():
-                                    self.settings.subscribed_users.discard(user_id)
-
-                        self._save_settings()
-                        self.last_signal_action = signal.action
-                        logger.info(f"Sent auto alert: {signal.action.value}")
-
-                # Wait for next scan
-                await asyncio.sleep(self.settings.interval_minutes * 60)
-
-            except asyncio.CancelledError:
-                logger.info("Auto alert loop cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in auto alert loop: {e}")
-                await asyncio.sleep(60)  # Wait 1 minute before retry
-
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enhanced help command"""
-        await update.message.reply_text(help_message, parse_mode='Markdown')
-
-    def run(self):
-        """Start the enhanced bot"""
-        # Create application
-        self.application = Application.builder().token(self.telegram_token).build()
-
-        # Add handlers
-        self.application.add_handler(CommandHandler("start", self.start_command))
-        self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CommandHandler("analyze", self.analyze_command))
-        self.application.add_handler(CommandHandler("performance", self.performance_command))
-        self.application.add_handler(CommandHandler("set_interval", self.set_interval_command))
-        self.application.add_handler(CommandHandler("timeframe", self.timeframe_command))
-        self.application.add_handler(CommandHandler("alerts", self.alerts_command))
-        self.application.add_handler(CommandHandler("config", self.config_command))
-        self.application.add_handler(CallbackQueryHandler(self.button_callback))
-
-        # Start auto alerts if enabled
-        if self.settings.auto_alerts and self.settings.subscribed_users:
-            asyncio.create_task(self._start_auto_alerts())
-
-        # Start the bot
-        logger.info("Starting Enhanced Forex Telegram Bot v2.0...")
-        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 def main():
-    """Main function to run the enhanced bot"""
-    # Configuration - Replace with your actual tokens
+    """Run the enhanced bot"""
     TELEGRAM_BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"
-    TWELVEDATA_API_KEY = "YOUR_TWELVEDATA_API_KEY_HERE"  # Optional
-
-    # Validate token
-    if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
-        logger.error("Please set your Telegram bot token in the TELEGRAM_BOT_TOKEN variable")
-        print("\n🔑 SETUP REQUIRED:")
-        print("1. Get bot token from @BotFather on Telegram")
-        print("2. Replace 'YOUR_TELEGRAM_BOT_TOKEN_HERE' with your actual token")
-        print("3. Optionally get TwelveData API key for real market data")
-        print("4. Run: pip install python-telegram-bot requests numpy")
-        return
+    TWELVEDATA_API_KEY = "b971d5ae2d0447fbb2fa621565a16334"
 
     try:
-        # Create and run enhanced bot
-        bot = ForexTelegramBot(
+        bot = EnhancedForexBot(
             telegram_token=TELEGRAM_BOT_TOKEN,
-            api_key=TWELVEDATA_API_KEY if TWELVEDATA_API_KEY != "YOUR_TWELVEDATA_API_KEY_HERE" else None
+            api_key=TWELVEDATA_API_KEY
         )
         bot.run()
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
     except Exception as e:
-        logger.error(f"Bot crashed: {e}")
+        logger.error(f"Bot error: {e}")
 
 if __name__ == "__main__":
     main()
