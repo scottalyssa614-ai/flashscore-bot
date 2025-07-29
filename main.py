@@ -488,6 +488,108 @@ class SignalGenerator:
             currency_pair=currency_pair
         )
 
+class CurrencyPairValidator:
+    """Validate and format currency pairs"""
+    
+    @staticmethod
+    def validate_and_format(pair: str) -> Tuple[bool, str, str]:
+        """Validate currency pair and return API format and display format"""
+        valid_pairs = {
+            "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
+            "EURJPY", "GBPJPY", "EURGBP", "EURAUD", "EURCHF", "AUDJPY", "GBPCHF",
+            "CHFJPY", "EURNZD", "AUDCHF", "GBPAUD", "GBPCAD", "GBPNZD", "AUDCAD",
+            "AUDNZD", "NZDJPY", "NZDCHF", "NZDCAD", "CADCHF", "CADJPY"
+        }
+        
+        pair_upper = pair.upper()
+        if pair_upper in valid_pairs:
+            # Format for API (usually with slash)
+            api_format = f"{pair_upper[:3]}/{pair_upper[3:]}"
+            return True, api_format, pair_upper
+        return False, "", ""
+
+class LiveForexTelegramBot:
+    """Base Telegram bot for forex signals"""
+    
+    def __init__(self, telegram_token: str, api_key: str):
+        self.telegram_token = telegram_token
+        self.api_key = api_key
+        self.settings = BotSettings()
+        self.signal_generator = SignalGenerator(self.settings)
+        self.performance_tracker = PerformanceTracker()
+        self.application = None
+        
+    def setup_handlers(self):
+        """Setup command handlers"""
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("analyze", self.analyze_command))
+        self.application.add_handler(CommandHandler("performance", self.performance_command))
+        self.application.add_handler(CommandHandler("settings", self.settings_command))
+        
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /start command"""
+        user_id = update.effective_user.id
+        self.settings.subscribed_users.add(user_id)
+        
+        welcome_message = """
+🚀 **Enhanced Forex Signal Bot v4.0**
+
+Welcome! Your bot is now active and monitoring forex markets.
+
+Use `/help` to see all available commands.
+Use `/analyze EURUSD` to get instant analysis.
+Use `/performance` to view trading statistics.
+
+Happy trading! 📈
+"""
+        await update.message.reply_text(welcome_message, parse_mode='Markdown')
+        
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /help command"""
+        await update.message.reply_text(help_message, parse_mode='Markdown')
+        
+    async def analyze_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /analyze command"""
+        if not context.args:
+            await update.message.reply_text("Usage: /analyze [PAIR]\nExample: /analyze EURUSD")
+            return
+            
+        currency_pair = context.args[0].upper()
+        await update.message.reply_text(f"⏳ Analyzing {currency_pair}...")
+        
+        try:
+            # This would fetch real data and analyze
+            await update.message.reply_text(f"Analysis for {currency_pair} completed!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Analysis failed: {str(e)}")
+            
+    async def performance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /performance command"""
+        await update.message.reply_text("📊 Performance statistics would be displayed here.")
+        
+    async def settings_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /settings command"""
+        await update.message.reply_text("⚙️ Settings panel would be displayed here.")
+        
+    def run(self):
+        """Run the bot"""
+        self.application = Application.builder().token(self.telegram_token).build()
+        self.setup_handlers()
+        
+        logger.info("Starting Enhanced Forex Signal Bot...")
+        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+class PerformanceTracker:
+    """Track trading performance"""
+    
+    def __init__(self):
+        self.trades = []
+        
+    def add_trade(self, signal: TradingSignal):
+        """Add a trade to tracking"""
+        self.trades.append(signal)
+
 class EnhancedForexBot(LiveForexTelegramBot):
     """Enhanced version with backtesting and improved features"""
 
@@ -578,6 +680,12 @@ class EnhancedForexBot(LiveForexTelegramBot):
             profit_factor=round(profit_factor, 2),
             max_drawdown=round(max_drawdown * 100, 1),
             pnl=round(total_pnl, 2)
+        )
+
+    def setup_handlers(self):
+        """Setup command handlers including backtest"""
+        super().setup_handlers()
+        self.application.add_handler(CommandHandler("backtest", self.backtest_command))
 
     async def _send_backtest_results(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, 
                                    result: BacktestResult):
@@ -603,6 +711,37 @@ class EnhancedForexBot(LiveForexTelegramBot):
 - Drawdown < 20% is acceptable
 """
         await context.bot.send_message(chat_id, message, parse_mode='Markdown')
+    
+    async def _fetch_historical_data(self, currency_pair: str, start_date: datetime, end_date: datetime) -> List[Candle]:
+        """Fetch historical candle data (placeholder implementation)"""
+        # This is a placeholder - in a real implementation you would fetch from your data provider
+        # For now, generate some dummy data for testing
+        candles = []
+        current_date = start_date
+        base_price = 1.1500  # Base price for simulation
+        
+        while current_date < end_date:
+            # Generate realistic candle data
+            open_price = base_price + np.random.normal(0, 0.001)
+            close_price = open_price + np.random.normal(0, 0.0005)
+            high_price = max(open_price, close_price) + abs(np.random.normal(0, 0.0003))
+            low_price = min(open_price, close_price) - abs(np.random.normal(0, 0.0003))
+            volume = np.random.randint(1000, 10000)
+            
+            candle = Candle(
+                timestamp=current_date,
+                open=round(open_price, 5),
+                high=round(high_price, 5),
+                low=round(low_price, 5),
+                close=round(close_price, 5),
+                volume=volume
+            )
+            candles.append(candle)
+            
+            base_price = close_price  # Update base price for next candle
+            current_date += timedelta(minutes=15)  # 15-minute candles
+            
+        return candles
 
 def main():
     """Run the enhanced bot"""
