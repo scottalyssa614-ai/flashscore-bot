@@ -1,3 +1,25 @@
+import asyncio
+import logging
+import requests
+import numpy as np
+import json
+import os
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Set
+from dataclasses import dataclass, asdict
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from enum import Enum
+import threading
+import time
+
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 help_message = """
 📚 **Smart Forex Signal Bot v2.0 - Help**
 
@@ -42,27 +64,7 @@ help_message = """
 All signals are logged with timestamps, entry prices, TP/SL levels, and outcomes for performance analysis.
 
 The bot focuses on quality over quantity - only the strongest setups!
-        """import asyncio
-import logging
-import requests
-import numpy as np
-import json
-import os
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Set
-from dataclasses import dataclass, asdict
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
-from enum import Enum
-import threading
-import time
-
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+"""
 
 class SignalType(Enum):
     BUY = "BUY"
@@ -852,15 +854,6 @@ Choose an option below or type a command!
 
         return message
 
-💡 **Status:** {signal.reason}
-
-⏰ Timeframe: `{self.settings.timeframe}`
-🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
-
-💡 Try again later when conditions align better."""
-
-        return message
-
     async def performance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show performance statistics"""
         await self._send_performance(update.message.chat_id, context)
@@ -1077,40 +1070,6 @@ Choose an option below or type a command!
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Enhanced help command"""
-        help_message = """
-📚 **Smart Forex Signal Bot v2.0 - Help**
-
-**🆕 Enhanced Features:**
-• 💰 **TP/SL Suggestions** - Smart profit targets & risk management
-• ⏰ **Auto Alerts** - Background scanning every 15-60 minutes
-• 📊 **Performance Tracking** - Win/loss statistics & signal history
-• 🔧 **Multiple Indicators** - RSI + EMA + MACD + S/R + Patterns
-• ⚙️ **Customizable Settings** - Adjust intervals, timeframes, and alerts
-
-**📱 Commands:**
-• `/start` - Welcome & quick access menu
-• `/analyze` - Manual market analysis
-• `/performance` - View trading statistics
-• `/alerts [on/off]` - Toggle auto notifications
-• `/set_interval [15-60]` - Change scan frequency
-• `/timeframe [15min|30min|1h]` - Set analysis timeframe
-• `/config` - Show current settings
-
-**🎯 Signal Types:**
-🟢 **BUY** - Oversold + Support + Bullish patterns + EMA/MACD confirmation
-🔴 **SELL** - Overbought + Resistance + Bearish patterns + EMA/MACD confirmation
-⚪ **NO SIGNAL** - Conditions don't meet 60%+ confidence threshold
-
-**💰 Trade Management:**
-• Take Profit: 20-40 pips (automatically calculated)
-• Stop Loss: 15-25 pips (risk management)
-• High confidence signals only (60%+ threshold)
-
-**📈 Performance Tracking:**
-All signals are logged with timestamps, entry prices, TP/SL levels, and outcomes for performance analysis.
-
-The bot focuses on quality over quantity - only the strongest setups!
-        """
         await update.message.reply_text(help_message, parse_mode='Markdown')
 
     def run(self):
