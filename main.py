@@ -1,680 +1,1169 @@
+help_message = """
+📚 **Smart Forex Signal Bot v2.0 - Help**
 
+**🆕 Enhanced Features:**
+• 💱 **Multi-Currency Support** - Analyze any major forex pair
+• 💰 **TP/SL Suggestions** - Smart profit targets & risk management
+• ⏰ **Auto Alerts** - Background scanning every 15-60 minutes
+• 📊 **Performance Tracking** - Win/loss statistics & signal history
+• 🔧 **Multiple Indicators** - RSI + EMA + MACD + S/R + Patterns
+• ⚙️ **Customizable Settings** - Adjust intervals, timeframes, and alerts
+
+**📱 Commands:**
+• `/start` - Welcome & quick access menu
+• `/analyze [PAIR]` - Manual analysis (e.g., `/analyze GBPUSD`)
+• `/performance` - View trading statistics
+• `/alerts [on/off]` - Toggle auto notifications
+• `/set_interval [15-60]` - Change scan frequency
+• `/timeframe [15min|30min|1h]` - Set analysis timeframe
+• `/config` - Show current settings
+
+**💱 Supported Currency Pairs:**
+**Majors:** EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, USDCAD, NZDUSD
+**Crosses:** EURGBP, EURJPY, GBPJPY, AUDJPY, CHFJPY, and more
+
+**Examples:**
+• `/analyze` - Analyze EURUSD (default)
+• `/analyze GBPJPY` - Analyze GBP/JPY
+• `/analyze gbpusd` - Case insensitive
+
+**🎯 Signal Types:**
+🟢 **BUY** - Oversold + Support + Bullish patterns + EMA/MACD confirmation
+🔴 **SELL** - Overbought + Resistance + Bearish patterns + EMA/MACD confirmation
+⚪ **NO SIGNAL** - Conditions don't meet 60%+ confidence threshold
+
+**💰 Trade Management:**
+• Take Profit: 20-40 pips (automatically calculated)
+• Stop Loss: 15-25 pips (risk management)
+• High confidence signals only (60%+ threshold)
+• Proper pip calculation for JPY pairs
+
+**📈 Performance Tracking:**
+All signals are logged with timestamps, entry prices, TP/SL levels, and outcomes for performance analysis.
+
+The bot focuses on quality over quantity - only the strongest setups!
+        """import asyncio
 import logging
-import asyncio
-import pandas as pd
+import requests
 import numpy as np
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+import json
 import os
-from pathlib import Path
-
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Set
+from dataclasses import dataclass, asdict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, 
-    MessageHandler, filters, ContextTypes, ConversationHandler
-)
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, classification_report
-import joblib
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from enum import Enum
+import threading
+import time
 
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler('bot.log'),
-        logging.StreamHandler()
-    ]
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Conversation states
-TEAM_INPUT, STATS_INPUT = range(2)
+class SignalType(Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+    NONE = "NONE"
 
-class FootballPredictor:
-    """Advanced Football prediction engine using real match statistics"""
-    
-    def __init__(self):
-        self.model = None
-        self.scaler = StandardScaler()
-        self.model_path = "football_model.pkl"
-        self.scaler_path = "scaler.pkl"
-        self.predictions_log = "predictions_log.csv"
-        
-    def generate_realistic_training_data(self, n_samples: int = 5000) -> pd.DataFrame:
-        """Generate realistic football match data based on actual football statistics"""
-        np.random.seed(42)
-        
-        # More realistic football data distributions
-        data = {
-            # Team ratings (1-100 scale)
-            'home_team_rating': np.random.normal(65, 20, n_samples).clip(1, 100),
-            'away_team_rating': np.random.normal(65, 20, n_samples).clip(1, 100),
-            
-            # Recent form (last 5 games: 0-15 points)
-            'home_recent_form': np.random.uniform(0, 15, n_samples),
-            'away_recent_form': np.random.uniform(0, 15, n_samples),
-            
-            # Head to head record
-            'home_h2h_wins': np.random.poisson(2, n_samples),
-            'away_h2h_wins': np.random.poisson(2, n_samples),
-            'h2h_draws': np.random.poisson(1, n_samples),
-            
-            # Goals statistics (per game averages)
-            'home_goals_for_avg': np.random.gamma(2, 0.8, n_samples).clip(0, 5),
-            'home_goals_against_avg': np.random.gamma(2, 0.7, n_samples).clip(0, 4),
-            'away_goals_for_avg': np.random.gamma(2, 0.7, n_samples).clip(0, 4),
-            'away_goals_against_avg': np.random.gamma(2, 0.8, n_samples).clip(0, 4),
-            
-            # League position (1-20)
-            'home_league_position': np.random.randint(1, 21, n_samples),
-            'away_league_position': np.random.randint(1, 21, n_samples),
-            
-            # Injury/suspension count
-            'home_missing_players': np.random.poisson(2, n_samples).clip(0, 8),
-            'away_missing_players': np.random.poisson(2, n_samples).clip(0, 8),
-            
-            # Days since last match
-            'home_rest_days': np.random.choice([3, 4, 7, 14], n_samples, p=[0.4, 0.3, 0.25, 0.05]),
-            'away_rest_days': np.random.choice([3, 4, 7, 14], n_samples, p=[0.4, 0.3, 0.25, 0.05]),
-        }
-        
-        df = pd.DataFrame(data)
-        
-        # Create realistic outcome probabilities
-        rating_diff = df['home_team_rating'] - df['away_team_rating']
-        form_diff = df['home_recent_form'] - df['away_recent_form']
-        position_advantage = df['away_league_position'] - df['home_league_position']
-        goal_diff = (df['home_goals_for_avg'] - df['home_goals_against_avg']) - (df['away_goals_for_avg'] - df['away_goals_against_avg'])
-        rest_advantage = df['home_rest_days'] - df['away_rest_days']
-        
-        # Home advantage factor
-        home_advantage = 3
-        
-        # Combined strength indicator
-        strength_indicator = (rating_diff + form_diff*2 + position_advantage + goal_diff*5 + rest_advantage*0.5 + home_advantage) / 15
-        
-        # Convert to probabilities using sigmoid
-        home_prob = 1 / (1 + np.exp(-strength_indicator))
-        draw_prob = 0.25 + 0.05 * np.cos(strength_indicator)  # Draws more likely when teams are close
-        away_prob = 1 - home_prob - draw_prob.clip(0, 0.4)
-        
-        # Ensure probabilities are valid
-        home_prob = home_prob.clip(0.1, 0.8)
-        draw_prob = draw_prob.clip(0.15, 0.4)
-        away_prob = (1 - home_prob - draw_prob).clip(0.1, 0.8)
-        
-        # Generate outcomes
-        outcomes = []
-        for i in range(n_samples):
-            rand = np.random.random()
-            if rand < away_prob[i]:
-                outcomes.append(0)  # Away win
-            elif rand < away_prob[i] + draw_prob[i]:
-                outcomes.append(1)  # Draw
-            else:
-                outcomes.append(2)  # Home win
-                
-        df['outcome'] = outcomes
-        return df
-    
-    def train_model(self, retrain: bool = False) -> bool:
-        """Train the prediction model with realistic data"""
-        try:
-            if not retrain and Path(self.model_path).exists():
-                self.model = joblib.load(self.model_path)
-                self.scaler = joblib.load(self.scaler_path)
-                logger.info("Loaded existing model")
-                return True
-            
-            logger.info("Training advanced prediction model...")
-            df = self.generate_realistic_training_data()
-            
-            features = [
-                'home_team_rating', 'away_team_rating', 'home_recent_form', 'away_recent_form',
-                'home_h2h_wins', 'away_h2h_wins', 'h2h_draws',
-                'home_goals_for_avg', 'home_goals_against_avg', 'away_goals_for_avg', 'away_goals_against_avg',
-                'home_league_position', 'away_league_position', 'home_missing_players', 'away_missing_players',
-                'home_rest_days', 'away_rest_days'
-            ]
-            
-            X = df[features]
-            y = df['outcome']
-            
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-            
-            X_train_scaled = self.scaler.fit_transform(X_train)
-            X_test_scaled = self.scaler.transform(X_test)
-            
-            # Advanced Random Forest with better parameters
-            self.model = RandomForestClassifier(
-                n_estimators=200,
-                max_depth=15,
-                min_samples_split=5,
-                min_samples_leaf=2,
-                random_state=42,
-                class_weight='balanced'
-            )
-            self.model.fit(X_train_scaled, y_train)
-            
-            # Evaluate model
-            y_pred = self.model.predict(X_test_scaled)
-            accuracy = accuracy_score(y_test, y_pred)
-            
-            logger.info(f"Advanced model trained with accuracy: {accuracy:.3f}")
-            
-            # Save model
-            joblib.dump(self.model, self.model_path)
-            joblib.dump(self.scaler, self.scaler_path)
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error training model: {e}")
-            return False
-    
-    def predict_match_with_stats(self, match_stats: Dict) -> Dict:
-        """Predict match outcome using provided statistics"""
-        try:
-            if self.model is None:
-                raise ValueError("Model not trained")
-            
-            # Extract features from match stats
-            features = np.array([[
-                float(match_stats['home_team_rating']),
-                float(match_stats['away_team_rating']),
-                float(match_stats['home_recent_form']),
-                float(match_stats['away_recent_form']),
-                int(match_stats['home_h2h_wins']),
-                int(match_stats['away_h2h_wins']),
-                int(match_stats['h2h_draws']),
-                float(match_stats['home_goals_for_avg']),
-                float(match_stats['home_goals_against_avg']),
-                float(match_stats['away_goals_for_avg']),
-                float(match_stats['away_goals_against_avg']),
-                int(match_stats['home_league_position']),
-                int(match_stats['away_league_position']),
-                int(match_stats['home_missing_players']),
-                int(match_stats['away_missing_players']),
-                int(match_stats['home_rest_days']),
-                int(match_stats['away_rest_days'])
-            ]])
-            
-            features_scaled = self.scaler.transform(features)
-            
-            # Get prediction probabilities
-            probabilities = self.model.predict_proba(features_scaled)[0]
-            prediction = self.model.predict(features_scaled)[0]
-            
-            outcome_labels = ['Away Win', 'Draw', 'Home Win']
-            
-            # Calculate confidence based on probability distribution
-            confidence = max(probabilities) * 100
-            
-            # Additional analysis
-            prob_dict = {
-                'away_win': probabilities[0] * 100,
-                'draw': probabilities[1] * 100,
-                'home_win': probabilities[2] * 100
-            }
-            
-            # Risk assessment
-            entropy = -sum(p * np.log2(p + 1e-10) for p in probabilities)
-            risk_level = "Low" if entropy < 1.2 else "Medium" if entropy < 1.5 else "High"
-            
-            result = {
-                'home_team': match_stats['home_team'],
-                'away_team': match_stats['away_team'],
-                'prediction': outcome_labels[prediction],
-                'confidence': confidence,
-                'probabilities': prob_dict,
-                'risk_level': risk_level,
-                'entropy': entropy,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            # Log prediction
-            self.log_prediction(result, match_stats)
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error making prediction: {e}")
-            return None
-    
-    def log_prediction(self, prediction: Dict, match_stats: Dict):
-        """Log prediction with input stats to CSV file"""
-        try:
-            log_data = {
-                'timestamp': prediction['timestamp'],
-                'home_team': prediction['home_team'],
-                'away_team': prediction['away_team'],
-                'prediction': prediction['prediction'],
-                'confidence': prediction['confidence'],
-                'home_win_prob': prediction['probabilities']['home_win'],
-                'draw_prob': prediction['probabilities']['draw'],
-                'away_win_prob': prediction['probabilities']['away_win'],
-                'risk_level': prediction['risk_level'],
-                **match_stats  # Include all input stats
-            }
-            
-            df_new = pd.DataFrame([log_data])
-            
-            if Path(self.predictions_log).exists():
-                df_existing = pd.read_csv(self.predictions_log)
-                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-            else:
-                df_combined = df_new
-            
-            df_combined.to_csv(self.predictions_log, index=False)
-            
-        except Exception as e:
-            logger.error(f"Error logging prediction: {e}")
+@dataclass
+class Candle:
+    """Represents a single candlestick"""
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
 
-class FootballBot:
-    """Advanced Telegram bot for football predictions with user input"""
-    
-    def __init__(self, token: str):
-        self.token = token
-        self.predictor = FootballPredictor()
-        self.application = None
-        self.user_data = {}
-        
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start command handler"""
-        welcome_message = """
-💰 **PROFESSIONAL FOOTBALL PREDICTION BOT** 💰
+@dataclass
+class TradingSignal:
+    """Represents a trading signal with TP/SL"""
+    action: SignalType
+    confidence: float
+    rsi: float
+    ema_20: float
+    ema_50: float
+    macd: float
+    macd_signal: float
+    pattern: str
+    support_resistance: float
+    current_price: float
+    take_profit: float
+    stop_loss: float
+    tp_pips: int
+    sl_pips: int
+    reason: str
+    timestamp: datetime
 
-🎯 **MAKE MILLIONS WITH ACCURATE PREDICTIONS!**
+@dataclass
+class BotSettings:
+    """Bot configuration settings"""
+    interval_minutes: int = 15
+    timeframe: str = "15min"
+    tp_pips_min: int = 20
+    tp_pips_max: int = 40
+    sl_pips_min: int = 15
+    sl_pips_max: int = 25
+    auto_alerts: bool = False
+    subscribed_users: Set[int] = None
 
-This bot uses advanced machine learning with YOUR data to provide precise predictions.
+    def __post_init__(self):
+        if self.subscribed_users is None:
+            self.subscribed_users = set()
 
-**Commands:**
-/predict - Start prediction with your match data
-/stats - View prediction history
-/help - Show detailed usage guide
+class TechnicalAnalyzer:
+    """Enhanced technical analysis with multiple indicators"""
 
-**NO RANDOMNESS - PURE DATA-DRIVEN PREDICTIONS** 📊
+    @staticmethod
+    def calculate_rsi(prices: List[float], period: int = 14) -> float:
+        """Calculate RSI (Relative Strength Index)"""
+        if len(prices) < period + 1:
+            return 50.0
+
+        prices_array = np.array(prices)
+        deltas = np.diff(prices_array)
+
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
+
+        if avg_loss == 0:
+            return 100.0
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return round(rsi, 2)
+
+    @staticmethod
+    def calculate_ema(prices: List[float], period: int) -> float:
+        """Calculate Exponential Moving Average"""
+        if len(prices) < period:
+            return np.mean(prices) if prices else 0.0
+
+        prices_array = np.array(prices)
+        alpha = 2 / (period + 1)
+        ema = prices_array[0]
+
+        for price in prices_array[1:]:
+            ema = alpha * price + (1 - alpha) * ema
+
+        return round(ema, 5)
+
+    @staticmethod
+    def calculate_macd(prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[float, float]:
+        """Calculate MACD and Signal line"""
+        if len(prices) < slow:
+            return 0.0, 0.0
+
+        ema_fast = TechnicalAnalyzer.calculate_ema(prices, fast)
+        ema_slow = TechnicalAnalyzer.calculate_ema(prices, slow)
+        macd_line = ema_fast - ema_slow
+
+        # For signal line, we need historical MACD values
+        if len(prices) < slow + signal:
+            signal_line = macd_line
+        else:
+            macd_values = []
+            for i in range(slow, len(prices) + 1):
+                ema_f = TechnicalAnalyzer.calculate_ema(prices[:i], fast)
+                ema_s = TechnicalAnalyzer.calculate_ema(prices[:i], slow)
+                macd_values.append(ema_f - ema_s)
+
+            signal_line = TechnicalAnalyzer.calculate_ema(macd_values, signal)
+
+        return round(macd_line, 6), round(signal_line, 6)
+
+    @staticmethod
+    def find_support_resistance(candles: List[Candle], lookback: int = 20) -> Tuple[float, float]:
+        """Find recent support and resistance levels"""
+        if len(candles) < lookback:
+            lookback = len(candles)
+
+        recent_candles = candles[-lookback:]
+        highs = [c.high for c in recent_candles]
+        lows = [c.low for c in recent_candles]
+
+        resistance_levels = []
+        support_levels = []
+
+        for i in range(2, len(recent_candles) - 2):
+            # Check for resistance (local high)
+            if (recent_candles[i].high > recent_candles[i-1].high and
+                recent_candles[i].high > recent_candles[i-2].high and
+                recent_candles[i].high > recent_candles[i+1].high and
+                recent_candles[i].high > recent_candles[i+2].high):
+                resistance_levels.append(recent_candles[i].high)
+
+            # Check for support (local low)
+            if (recent_candles[i].low < recent_candles[i-1].low and
+                recent_candles[i].low < recent_candles[i-2].low and
+                recent_candles[i].low < recent_candles[i+1].low and
+                recent_candles[i].low < recent_candles[i+2].low):
+                support_levels.append(recent_candles[i].low)
+
+        resistance = max(resistance_levels) if resistance_levels else max(highs)
+        support = min(support_levels) if support_levels else min(lows)
+
+        return support, resistance
+
+    @staticmethod
+    def detect_candlestick_patterns(candles: List[Candle]) -> str:
+        """Detect candlestick patterns"""
+        if len(candles) < 2:
+            return "None"
+
+        current = candles[-1]
+        previous = candles[-2]
+
+        current_body = abs(current.close - current.open)
+        previous_body = abs(previous.close - previous.open)
+        current_range = current.high - current.low
+
+        # Bullish Engulfing
+        if (previous.close < previous.open and
+            current.close > current.open and
+            current.open < previous.close and
+            current.close > previous.open and
+            current_body > previous_body * 1.2):
+            return "Bullish Engulfing"
+
+        # Bearish Engulfing
+        if (previous.close > previous.open and
+            current.close < current.open and
+            current.open > previous.close and
+            current.close < previous.open and
+            current_body > previous_body * 1.2):
+            return "Bearish Engulfing"
+
+        # Doji
+        if current_body < current_range * 0.1:
+            return "Doji"
+
+        # Bullish Pin Bar
+        lower_shadow = current.open - current.low if current.close > current.open else current.close - current.low
+        upper_shadow = current.high - current.close if current.close > current.open else current.high - current.open
+        if (lower_shadow > current_body * 2 and
+            upper_shadow < current_body * 0.5 and
+            current_range > 0):
+            return "Bullish Pin Bar"
+
+        # Bearish Pin Bar
+        if (upper_shadow > current_body * 2 and
+            lower_shadow < current_body * 0.5 and
+            current_range > 0):
+            return "Bearish Pin Bar"
+
+        return "None"
+
+class CurrencyPairValidator:
+    """Validates and formats currency pairs"""
+
+    # Major and minor forex pairs
+    VALID_PAIRS = {
+        # Major pairs
+        'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD',
+        # Cross pairs
+        'EURGBP', 'EURJPY', 'EURCHF', 'EURAUD', 'EURCAD', 'EURNZD',
+        'GBPJPY', 'GBPCHF', 'GBPAUD', 'GBPCAD', 'GBPNZD',
+        'AUDJPY', 'AUDCHF', 'AUDCAD', 'AUDNZD',
+        'CADJPY', 'CADCHF', 'NZDJPY', 'NZDCHF', 'NZDCAD',
+        'CHFJPY', 'JPYSGD'
+    }
+
+    @classmethod
+    def validate_and_format(cls, pair_input: str) -> Tuple[bool, str, str]:
         """
-        
+        Validate and format currency pair
+        Returns: (is_valid, formatted_pair_for_api, display_pair)
+        """
+        if not pair_input:
+            return True, "EUR/USD", "EURUSD"
+
+        # Clean input
+        cleaned = pair_input.upper().replace('/', '').replace('-', '').replace('_', '')
+
+        # Check if it's a valid pair
+        if cleaned in cls.VALID_PAIRS:
+            # Format for API (with slash)
+            api_format = f"{cleaned[:3]}/{cleaned[3:]}"
+            return True, api_format, cleaned
+
+        # Try common variations
+        if len(cleaned) == 6:
+            reversed_pair = cleaned[3:] + cleaned[:3]
+            if reversed_pair in cls.VALID_PAIRS:
+                api_format = f"{reversed_pair[:3]}/{reversed_pair[3:]}"
+                return True, api_format, reversed_pair
+
+        return False, "", cleaned
+
+class ForexDataProvider:
+    """Handles fetching forex data from external APIs"""
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key
+        self.base_url = "https://api.twelvedata.com"
+
+    async def get_candles(self, symbol: str = "EUR/USD", interval: str = "15min", 
+                         count: int = 100) -> List[Candle]:
+        """Fetch candlestick data from TwelveData API"""
+        try:
+            params = {
+                "symbol": symbol,
+                "interval": interval,
+                "outputsize": count,
+                "format": "JSON"
+            }
+
+            if self.api_key:
+                params["apikey"] = self.api_key
+
+            url = f"{self.base_url}/time_series"
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if "values" not in data:
+                logger.warning(f"No values in API response, using mock data")
+                return self._get_mock_data()
+
+            candles = []
+            for item in reversed(data["values"]):
+                try:
+                    candle = Candle(
+                        timestamp=datetime.strptime(item["datetime"], "%Y-%m-%d %H:%M:%S"),
+                        open=float(item["open"]),
+                        high=float(item["high"]),
+                        low=float(item["low"]),
+                        close=float(item["close"]),
+                        volume=float(item.get("volume", 0))
+                    )
+                    candles.append(candle)
+                except (ValueError, KeyError) as e:
+                    logger.warning(f"Error parsing candle data: {e}")
+                    continue
+
+            return candles[-count:] if candles else self._get_mock_data(symbol)
+
+        except Exception as e:
+            logger.error(f"Error fetching data: {e}")
+            return self._get_mock_data(symbol)
+
+    def _get_mock_data(self, symbol: str = "EUR/USD") -> List[Candle]:
+        """Generate realistic mock data"""
+        logger.info("Using mock data")
+        candles = []
+        base_price = 1.0850
+        base_time = datetime.now() - timedelta(hours=25)
+
+        for i in range(100):
+            change = np.random.normal(0, 0.0005)
+            open_price = base_price + change
+            high_price = open_price + abs(np.random.normal(0, 0.0003))
+            low_price = open_price - abs(np.random.normal(0, 0.0003))
+            close_price = open_price + np.random.normal(0, 0.0002)
+
+            high_price = max(high_price, open_price, close_price)
+            low_price = min(low_price, open_price, close_price)
+
+            candle = Candle(
+                timestamp=base_time + timedelta(minutes=15 * i),
+                open=round(open_price, 5),
+                high=round(high_price, 5),
+                low=round(low_price, 5),
+                close=round(close_price, 5),
+                volume=np.random.uniform(1000, 5000)
+            )
+            candles.append(candle)
+            base_price = close_price
+
+        return candles
+
+class PerformanceTracker:
+    """Tracks and logs trading performance"""
+
+    def __init__(self, log_file: str = "performance_log.json"):
+        self.log_file = log_file
+        self.signals_log = self._load_log()
+
+    def _load_log(self) -> List[Dict]:
+        """Load existing performance log"""
+        try:
+            if os.path.exists(self.log_file):
+                with open(self.log_file, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading performance log: {e}")
+        return []
+
+    def _save_log(self):
+        """Save performance log to file"""
+        try:
+            with open(self.log_file, 'w') as f:
+                json.dump(self.signals_log, f, indent=2, default=str)
+        except Exception as e:
+            logger.error(f"Error saving performance log: {e}")
+
+    def log_signal(self, signal: TradingSignal):
+        """Log a new trading signal"""
+        if signal.action == SignalType.NONE:
+            return
+
+        log_entry = {
+            "timestamp": signal.timestamp.isoformat(),
+            "action": signal.action.value,
+            "entry_price": signal.current_price,
+            "take_profit": signal.take_profit,
+            "stop_loss": signal.stop_loss,
+            "tp_pips": signal.tp_pips,
+            "sl_pips": signal.sl_pips,
+            "rsi": signal.rsi,
+            "pattern": signal.pattern,
+            "confidence": signal.confidence,
+            "status": "OPEN"  # OPEN, TP_HIT, SL_HIT
+        }
+
+        self.signals_log.append(log_entry)
+        self._save_log()
+        logger.info(f"Logged {signal.action.value} signal at {signal.current_price}")
+
+    def get_stats(self) -> Dict:
+        """Calculate performance statistics"""
+        if not self.signals_log:
+            return {
+                "total_signals": 0,
+                "buy_signals": 0,
+                "sell_signals": 0,
+                "avg_confidence": 0,
+                "last_signal": "None"
+            }
+
+        buy_count = sum(1 for s in self.signals_log if s["action"] == "BUY")
+        sell_count = sum(1 for s in self.signals_log if s["action"] == "SELL")
+        avg_confidence = np.mean([s["confidence"] for s in self.signals_log])
+
+        last_signal = self.signals_log[-1] if self.signals_log else None
+        last_signal_time = ""
+        if last_signal:
+            last_time = datetime.fromisoformat(last_signal["timestamp"])
+            last_signal_time = last_time.strftime("%Y-%m-%d %H:%M")
+
+        return {
+            "total_signals": len(self.signals_log),
+            "buy_signals": buy_count,
+            "sell_signals": sell_count,
+            "avg_confidence": round(avg_confidence, 1),
+            "last_signal": f"{last_signal['action']} at {last_signal_time}" if last_signal else "None"
+        }
+
+class SignalGenerator:
+    """Enhanced signal generator with multiple indicators and TP/SL calculation"""
+
+    def __init__(self, settings: BotSettings):
+        self.analyzer = TechnicalAnalyzer()
+        self.settings = settings
+
+    def calculate_tp_sl(self, action: SignalType, entry_price: float, currency_pair: str) -> Tuple[float, float, int, int]:
+        """Calculate Take Profit and Stop Loss levels"""
+        if action == SignalType.NONE:
+            return 0.0, 0.0, 0, 0
+
+        # Calculate pip value (for EUR/USD, 1 pip = 0.0001)
+        pip_value = 0.0001
+
+        # Random TP/SL within configured ranges
+        tp_pips = np.random.randint(self.settings.tp_pips_min, self.settings.tp_pips_max + 1)
+        sl_pips = np.random.randint(self.settings.sl_pips_min, self.settings.sl_pips_max + 1)
+
+        if action == SignalType.BUY:
+            take_profit = entry_price + (tp_pips * pip_value)
+            stop_loss = entry_price - (sl_pips * pip_value)
+        else:  # SELL
+            take_profit = entry_price - (tp_pips * pip_value)
+            stop_loss = entry_price + (sl_pips * pip_value)
+
+        return round(take_profit, 5), round(stop_loss, 5), tp_pips, sl_pips
+
+    def generate_signal(self, candles: List[Candle], currency_pair: str = "EUR/USD") -> TradingSignal:
+        """Generate enhanced trading signal with multiple indicators for any currency pair"""
+        if len(candles) < 50:
+            return self._create_no_signal(candles, currency_pair, "Insufficient data for analysis")
+
+        # Calculate all indicators
+        closes = [c.close for c in candles]
+        rsi = self.analyzer.calculate_rsi(closes)
+        ema_20 = self.analyzer.calculate_ema(closes, 20)
+        ema_50 = self.analyzer.calculate_ema(closes, 50)
+        macd, macd_signal = self.analyzer.calculate_macd(closes)
+        support, resistance = self.analyzer.find_support_resistance(candles)
+        pattern = self.analyzer.detect_candlestick_patterns(candles)
+        current_price = candles[-1].close
+
+        # Determine proximity to S/R levels
+        support_distance = abs(current_price - support) / current_price
+        resistance_distance = abs(current_price - resistance) / current_price
+
+        # Enhanced signal generation logic
+        signal_strength = 0
+        action = SignalType.NONE
+        conditions = []
+
+        # BUY conditions
+        buy_score = 0
+        buy_conditions = []
+
+        if rsi < 35:
+            buy_conditions.append("RSI Oversold")
+            buy_score += 25
+
+        if support_distance < 0.002:
+            buy_conditions.append("Near Support")
+            buy_score += 20
+
+        if pattern in ["Bullish Engulfing", "Bullish Pin Bar"]:
+            buy_conditions.append(f"Bullish Pattern ({pattern})")
+            buy_score += 25
+
+        if ema_20 > ema_50:
+            buy_conditions.append("EMA Bullish")
+            buy_score += 15
+
+        if macd > macd_signal:
+            buy_conditions.append("MACD Bullish")
+            buy_score += 15
+
+        # SELL conditions
+        sell_score = 0
+        sell_conditions = []
+
+        if rsi > 65:
+            sell_conditions.append("RSI Overbought")
+            sell_score += 25
+
+        if resistance_distance < 0.002:
+            sell_conditions.append("Near Resistance")
+            sell_score += 20
+
+        if pattern in ["Bearish Engulfing", "Bearish Pin Bar"]:
+            sell_conditions.append(f"Bearish Pattern ({pattern})")
+            sell_score += 25
+
+        if ema_20 < ema_50:
+            sell_conditions.append("EMA Bearish")
+            sell_score += 15
+
+        if macd < macd_signal:
+            sell_conditions.append("MACD Bearish")
+            sell_score += 15
+
+        # Determine final signal (require minimum 60 confidence and 3+ conditions)
+        min_confidence = 60
+        min_conditions = 3
+
+        if (len(buy_conditions) >= min_conditions and 
+            buy_score >= min_confidence and 
+            sell_score < 30):  # Avoid conflicting signals
+            action = SignalType.BUY
+            signal_strength = min(buy_score, 100)
+            conditions = buy_conditions
+            key_level = support
+        elif (len(sell_conditions) >= min_conditions and 
+              sell_score >= min_confidence and 
+              buy_score < 30):
+            action = SignalType.SELL
+            signal_strength = min(sell_score, 100)
+            conditions = sell_conditions
+            key_level = resistance
+        else:
+            return self._create_no_signal(candles, currency_pair,
+                f"Conditions not met (Buy: {buy_score}%, Sell: {sell_score}%)")
+
+        # Calculate TP/SL
+        tp, sl, tp_pips, sl_pips = self.calculate_tp_sl(action, current_price, currency_pair)
+
+        return TradingSignal(
+            action=action,
+            confidence=signal_strength,
+            rsi=rsi,
+            ema_20=ema_20,
+            ema_50=ema_50,
+            macd=macd,
+            macd_signal=macd_signal,
+            pattern=pattern,
+            support_resistance=key_level,
+            current_price=current_price,
+            take_profit=tp,
+            stop_loss=sl,
+            tp_pips=tp_pips,
+            sl_pips=sl_pips,
+            reason=" + ".join(conditions),
+            timestamp=datetime.now()
+        )
+
+    def _create_no_signal(self, candles: List[Candle], currency_pair: str, reason: str) -> TradingSignal:
+        """Create a NO SIGNAL response"""
+        closes = [c.close for c in candles] if candles else [0]
+        current_price = closes[-1] if closes else 0
+
+        return TradingSignal(
+            action=SignalType.NONE,
+            confidence=0,
+            rsi=self.analyzer.calculate_rsi(closes) if len(closes) > 14 else 50,
+            ema_20=0,
+            ema_50=0,
+            macd=0,
+            macd_signal=0,
+            pattern="None",
+            support_resistance=0,
+            current_price=current_price,
+            take_profit=0,
+            stop_loss=0,
+            tp_pips=0,
+            sl_pips=0,
+            reason=reason,
+            timestamp=datetime.now()
+        )
+
+class ForexTelegramBot:
+    """Enhanced Telegram bot with auto alerts and performance tracking"""
+
+    def __init__(self, telegram_token: str, api_key: Optional[str] = None):
+        self.telegram_token = telegram_token
+        self.data_provider = ForexDataProvider(api_key)
+        self.settings = BotSettings()
+        self.signal_generator = SignalGenerator(self.settings)
+        self.performance_tracker = PerformanceTracker()
+        self.last_signal_action = SignalType.NONE
+        self.auto_alert_task = None
+        self.application = None
+
+        # Load settings
+        self._load_settings()
+
+    def _load_settings(self):
+        """Load bot settings from file"""
+        try:
+            if os.path.exists("bot_settings.json"):
+                with open("bot_settings.json", 'r') as f:
+                    data = json.load(f)
+                    self.settings.interval_minutes = data.get("interval_minutes", 15)
+                    self.settings.timeframe = data.get("timeframe", "15min")
+                    self.settings.auto_alerts = data.get("auto_alerts", False)
+                    self.settings.subscribed_users = set(data.get("subscribed_users", []))
+        except Exception as e:
+            logger.error(f"Error loading settings: {e}")
+
+    def _save_settings(self):
+        """Save bot settings to file"""
+        try:
+            data = {
+                "interval_minutes": self.settings.interval_minutes,
+                "timeframe": self.settings.timeframe,
+                "auto_alerts": self.settings.auto_alerts,
+                "subscribed_users": list(self.settings.subscribed_users)
+            }
+            with open("bot_settings.json", 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving settings: {e}")
+
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Enhanced start command"""
+        user_id = update.effective_user.id
+        self.settings.subscribed_users.add(user_id)
+        self._save_settings()
+
         keyboard = [
-            [InlineKeyboardButton("🎯 Make Prediction", callback_data="predict")],
-            [InlineKeyboardButton("📊 View Stats", callback_data="stats")],
-            [InlineKeyboardButton("❓ Help", callback_data="help")]
+            [InlineKeyboardButton("📊 Analyze Now", callback_data="analyze")],
+            [InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
+            [InlineKeyboardButton("📈 Performance", callback_data="performance")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            welcome_message, 
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-    
-    async def predict_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start prediction conversation"""
-        await update.message.reply_text(
-            "🎯 **PROFESSIONAL PREDICTION MODE** 💰\n\n"
-            "Enter the teams (format: Home_Team vs Away_Team)\n"
-            "Example: `Manchester_United vs Liverpool`",
-            parse_mode='Markdown'
-        )
-        return TEAM_INPUT
-    
-    async def get_teams(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get team names from user"""
-        try:
-            text = update.message.text.strip()
-            if ' vs ' not in text:
-                await update.message.reply_text(
-                    "❌ Invalid format! Use: Home_Team vs Away_Team\n"
-                    "Example: `Arsenal vs Chelsea`",
-                    parse_mode='Markdown'
-                )
-                return TEAM_INPUT
-            
-            home_team, away_team = text.split(' vs ')
-            home_team = home_team.strip()
-            away_team = away_team.strip()
-            
-            context.user_data['home_team'] = home_team
-            context.user_data['away_team'] = away_team
-            
-            stats_request = f"""
-📊 **MATCH STATISTICS REQUIRED** 📊
 
-**Match:** {home_team} vs {away_team}
+        welcome_message = """
+🤖 **Welcome to Smart Forex Signal Bot v2.0!**
 
-Please provide the following statistics (one per line):
+🆕 **New Features:**
+• 💰 Take Profit & Stop Loss suggestions
+• ⏰ Auto alerts every 15-30 minutes
+• 📊 Performance tracking & statistics
+• 🔧 Enhanced indicators (EMA, MACD)
+• ⚙️ Customizable settings
 
-**Team Ratings (1-100):**
-Home rating: 
-Away rating: 
+**Available Commands:**
+• `/analyze` - Get current market analysis
+• `/performance` - View trading statistics
+• `/set_interval [minutes]` - Set auto-scan interval
+• `/config` - Show current settings
+• `/alerts [on/off]` - Toggle auto alerts
 
-**Recent Form (points from last 5 games, 0-15):**
-Home form: 
-Away form: 
+**Enhanced Analysis:**
+✅ RSI + EMA 20/50 + MACD + S/R + Patterns
+✅ Smart TP/SL calculation (20-40 pips TP, 15-25 pips SL)
+✅ High-confidence signals only (60%+ threshold)
 
-**Head-to-Head Record:**
-Home wins: 
-Away wins: 
-Draws: 
-
-**Goals Per Game Average:**
-Home goals for: 
-Home goals against: 
-Away goals for: 
-Away goals against: 
-
-**League Positions (1-20):**
-Home position: 
-Away position: 
-
-**Missing Players:**
-Home missing: 
-Away missing: 
-
-**Rest Days:**
-Home rest days: 
-Away rest days: 
-
-**Example:**
-```
-85
-78
-12
-9
-3
-1
-2
-2.1
-1.2
-1.8
-1.4
-4
-7
-2
-1
-4
-3
-```
-
-**Copy and paste your numbers in this exact order!**
-            """
-            
-            await update.message.reply_text(stats_request, parse_mode='Markdown')
-            return STATS_INPUT
-            
-        except Exception as e:
-            logger.error(f"Error in get_teams: {e}")
-            await update.message.reply_text("❌ Error processing teams. Please try again.")
-            return TEAM_INPUT
-    
-    async def get_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Process statistics and make prediction"""
-        try:
-            stats_text = update.message.text.strip()
-            stats_lines = [line.strip() for line in stats_text.split('\n') if line.strip()]
-            
-            if len(stats_lines) != 17:
-                await update.message.reply_text(
-                    f"❌ Expected 17 values, got {len(stats_lines)}!\n\n"
-                    "Please provide all statistics in the exact order shown.",
-                    parse_mode='Markdown'
-                )
-                return STATS_INPUT
-            
-            # Parse statistics
-            match_stats = {
-                'home_team': context.user_data['home_team'],
-                'away_team': context.user_data['away_team'],
-                'home_team_rating': float(stats_lines[0]),
-                'away_team_rating': float(stats_lines[1]),
-                'home_recent_form': float(stats_lines[2]),
-                'away_recent_form': float(stats_lines[3]),
-                'home_h2h_wins': int(stats_lines[4]),
-                'away_h2h_wins': int(stats_lines[5]),
-                'h2h_draws': int(stats_lines[6]),
-                'home_goals_for_avg': float(stats_lines[7]),
-                'home_goals_against_avg': float(stats_lines[8]),
-                'away_goals_for_avg': float(stats_lines[9]),
-                'away_goals_against_avg': float(stats_lines[10]),
-                'home_league_position': int(stats_lines[11]),
-                'away_league_position': int(stats_lines[12]),
-                'home_missing_players': int(stats_lines[13]),
-                'away_missing_players': int(stats_lines[14]),
-                'home_rest_days': int(stats_lines[15]),
-                'away_rest_days': int(stats_lines[16])
-            }
-            
-            # Validate ranges
-            if not (1 <= match_stats['home_team_rating'] <= 100 and 1 <= match_stats['away_team_rating'] <= 100):
-                await update.message.reply_text("❌ Team ratings must be between 1-100")
-                return STATS_INPUT
-            
-            if not (0 <= match_stats['home_recent_form'] <= 15 and 0 <= match_stats['away_recent_form'] <= 15):
-                await update.message.reply_text("❌ Recent form must be between 0-15")
-                return STATS_INPUT
-            
-            # Show processing message
-            processing_msg = await update.message.reply_text(
-                "🤖 **ANALYZING YOUR DATA...**\n"
-                "💰 **CALCULATING MILLION-DOLLAR PREDICTION...**"
-            )
-            
-            # Get prediction
-            prediction = self.predictor.predict_match_with_stats(match_stats)
-            
-            if prediction is None:
-                await processing_msg.edit_text("❌ Error generating prediction. Please try again.")
-                return ConversationHandler.END
-            
-            # Format detailed result
-            confidence_emoji = "🟢" if prediction['confidence'] > 75 else "🟡" if prediction['confidence'] > 60 else "🔴"
-            risk_emoji = "🟢" if prediction['risk_level'] == "Low" else "🟡" if prediction['risk_level'] == "Medium" else "🔴"
-            
-            result_message = f"""
-💰 **PROFESSIONAL PREDICTION RESULT** 💰
-
-**Match:** {prediction['home_team']} vs {prediction['away_team']}
-
-🎯 **PREDICTION:** {prediction['prediction']}
-📈 **CONFIDENCE:** {prediction['confidence']:.1f}% {confidence_emoji}
-
-**DETAILED PROBABILITIES:**
-🏠 Home Win: {prediction['probabilities']['home_win']:.1f}%
-🤝 Draw: {prediction['probabilities']['draw']:.1f}%
-✈️ Away Win: {prediction['probabilities']['away_win']:.1f}%
-
-📊 **RISK ANALYSIS:**
-Risk Level: {prediction['risk_level']} {risk_emoji}
-Market Uncertainty: {prediction['entropy']:.2f}
-
-⏰ **Generated:** {datetime.fromisoformat(prediction['timestamp']).strftime('%Y-%m-%d %H:%M')}
-
-💡 **BETTING ADVICE:**
-{self.get_betting_advice(prediction)}
-
-🔥 **THIS IS YOUR MONEY-MAKING PREDICTION!** 💀
-            """
-            
-            await processing_msg.edit_text(result_message, parse_mode='Markdown')
-            return ConversationHandler.END
-            
-        except ValueError as e:
-            await update.message.reply_text(
-                "❌ Invalid number format! Please enter valid numbers.\n"
-                "Make sure decimals use dots (.) not commas (,)"
-            )
-            return STATS_INPUT
-        except Exception as e:
-            logger.error(f"Error in get_stats: {e}")
-            await update.message.reply_text("❌ Error processing statistics. Please try again.")
-            return STATS_INPUT
-    
-    def get_betting_advice(self, prediction: Dict) -> str:
-        """Generate betting advice based on prediction"""
-        confidence = prediction['confidence']
-        risk = prediction['risk_level']
-        
-        if confidence > 75 and risk == "Low":
-            return "💰 HIGH CONFIDENCE BET - Consider larger stake"
-        elif confidence > 65 and risk == "Medium":
-            return "⚖️ MODERATE BET - Standard stake recommended"
-        elif confidence > 55:
-            return "⚠️ LOW CONFIDENCE - Small stake or avoid"
-        else:
-            return "🚫 VERY RISKY - Avoid betting"
-    
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show detailed prediction statistics"""
-        try:
-            if not Path(self.predictor.predictions_log).exists():
-                await update.message.reply_text("📊 No predictions logged yet. Make your first prediction!")
-                return
-            
-            df = pd.read_csv(self.predictor.predictions_log)
-            
-            total_predictions = len(df)
-            avg_confidence = df['confidence'].mean()
-            high_conf_predictions = len(df[df['confidence'] > 70])
-            
-            # Most recent predictions
-            recent_predictions = df.tail(5)
-            
-            stats_message = f"""
-📊 **PROFESSIONAL STATISTICS** 📈
-
-**Total Predictions:** {total_predictions}
-**Average Confidence:** {avg_confidence:.1f}%
-**High Confidence (>70%):** {high_conf_predictions}
-
-**Recent Predictions:**
-            """
-            
-            for idx, pred in recent_predictions.iterrows():
-                stats_message += f"""
-🎯 {pred['home_team']} vs {pred['away_team']}
-   Result: {pred['prediction']} ({pred['confidence']:.1f}%)
-"""
-            
-            await update.message.reply_text(stats_message, parse_mode='Markdown')
-            
-        except Exception as e:
-            logger.error(f"Error in stats_command: {e}")
-            await update.message.reply_text("❌ Error retrieving statistics.")
-    
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Detailed help command"""
-        help_text = """
-💰 **PROFESSIONAL PREDICTION GUIDE** 💰
-
-**How to Use:**
-1. Type `/predict` to start
-2. Enter teams: `Home_Team vs Away_Team`
-3. Provide all 17 statistics in order
-4. Get your million-dollar prediction!
-
-**Required Statistics:**
-• Team ratings (1-100 scale)
-• Recent form (points from last 5 games)
-• Head-to-head record
-• Goals per game averages
-• Current league positions
-• Missing players count
-• Days of rest
-
-**Tips for Accuracy:**
-• Use official team ratings
-• Calculate recent form as: (Wins×3 + Draws×1)
-• Include all competitions in averages
-• Count only key missing players
-
-🔥 **ACCURATE DATA = ACCURATE PREDICTIONS = BIG PROFITS!** 💀
+Choose an option below or type a command!
         """
-        
-        await update.message.reply_text(help_text, parse_mode='Markdown')
-    
-    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Cancel conversation"""
-        await update.message.reply_text("❌ Prediction cancelled. Use /predict to start again.")
-        return ConversationHandler.END
-    
+        await update.message.reply_text(welcome_message, 
+                                      parse_mode='Markdown',
+                                      reply_markup=reply_markup)
+
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle inline keyboard callbacks"""
+        """Handle inline button callbacks"""
         query = update.callback_query
         await query.answer()
-        
-        if query.data == "predict":
-            await query.edit_message_text(
-                "🎯 To start prediction, use: `/predict`",
+
+        if query.data == "analyze":
+            await self._send_analysis(query.message.chat_id, context, "EURUSD", "EUR/USD")
+        elif query.data == "settings":
+            await self._send_settings(query.message.chat_id, context)
+        elif query.data == "performance":
+            await self._send_performance(query.message.chat_id, context)
+
+    async def analyze_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Enhanced analyze command with currency pair support"""
+        # Extract currency pair from command arguments
+        currency_pair = "EURUSD"  # Default
+        if context.args and len(context.args) > 0:
+            user_input = context.args[0]
+            is_valid, api_format, display_format = CurrencyPairValidator.validate_and_format(user_input)
+
+            if not is_valid:
+                await update.message.reply_text(
+                    f"❌ Invalid currency pair: `{user_input}`\n\n"
+                    "**Supported pairs:** EURUSD, GBPUSD, USDJPY, GBPJPY, EURJPY, AUDUSD, etc.\n"
+                    "**Usage:** `/analyze GBPUSD` or just `/analyze` for EURUSD",
+                    parse_mode='Markdown'
+                )
+                return
+
+            currency_pair = display_format
+            api_pair = api_format
+        else:
+            api_pair = "EUR/USD"
+
+        await self._send_analysis(update.message.chat_id, context, currency_pair, api_pair)
+
+    async def _send_analysis(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, 
+                           currency_pair: str = "EURUSD", api_pair: str = "EUR/USD"):
+        """Send market analysis for specified currency pair"""
+        await context.bot.send_message(chat_id, f"🔍 Analyzing {currency_pair}...")
+
+        try:
+            candles = await self.data_provider.get_candles(
+                symbol=api_pair,
+                interval=self.settings.timeframe,
+                count=100
+            )
+
+            if not candles:
+                await context.bot.send_message(chat_id, f"❌ Could not fetch data for {currency_pair}.")
+                return
+
+            signal = self.signal_generator.generate_signal(candles, api_pair)
+
+            # Log signal if it's not NONE
+            if signal.action != SignalType.NONE:
+                self.performance_tracker.log_signal(signal)
+
+            message = self._format_signal_message(signal, currency_pair)
+            await context.bot.send_message(chat_id, message, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in analysis: {e}")
+            await context.bot.send_message(chat_id, f"❌ Analysis failed for {currency_pair}. Please try again.")
+
+    def _format_signal_message(self, signal: TradingSignal, currency_pair: str) -> str:
+        """Format signal into readable message with currency pair"""
+        # Determine decimal places for display
+        decimals = 3 if 'JPY' in currency_pair else 5
+
+        if signal.action == SignalType.BUY:
+            emoji = "🟢"
+            message = f"""📈 **Pair:** {currency_pair}
+{emoji} **BUY SIGNAL DETECTED**
+
+💰 **Trade Setup:**
+• Entry: `{signal.current_price:.{decimals}f}`
+• 🎯 Take Profit: `{signal.take_profit:.{decimals}f}` (+{signal.tp_pips} pips)
+• 🛑 Stop Loss: `{signal.stop_loss:.{decimals}f}` (-{signal.sl_pips} pips)
+
+📊 **Technical Analysis:**
+• RSI: `{signal.rsi:.1f}`
+• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
+• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
+• Pattern: `{signal.pattern}`
+• Support: `{signal.support_resistance:.{decimals}f}`
+• Confidence: `{signal.confidence:.0f}%`
+
+📈 **Reason:** {signal.reason}
+
+⏰ Timeframe: `{self.settings.timeframe}`
+🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`"""
+
+        elif signal.action == SignalType.SELL:
+            emoji = "🔴"
+            message = f"""📈 **Pair:** {currency_pair}
+{emoji} **SELL SIGNAL DETECTED**
+
+💰 **Trade Setup:**
+• Entry: `{signal.current_price:.{decimals}f}`
+• 🎯 Take Profit: `{signal.take_profit:.{decimals}f}` (+{signal.tp_pips} pips)
+• 🛑 Stop Loss: `{signal.stop_loss:.{decimals}f}` (-{signal.sl_pips} pips)
+
+📊 **Technical Analysis:**
+• RSI: `{signal.rsi:.1f}`
+• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
+• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
+• Pattern: `{signal.pattern}`
+• Resistance: `{signal.support_resistance:.{decimals}f}`
+• Confidence: `{signal.confidence:.0f}%`
+
+📉 **Reason:** {signal.reason}
+
+⏰ Timeframe: `{self.settings.timeframe}`
+🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`"""
+
+        else:
+            emoji = "⚪"
+            message = f"""📈 **Pair:** {currency_pair}
+{emoji} **NO SIGNAL**
+
+📊 **Current Analysis:**
+• RSI: `{signal.rsi:.1f}`
+• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
+• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
+• Pattern: `{signal.pattern}`
+• Current Price: `{signal.current_price:.{decimals}f}`
+
+💡 **Status:** {signal.reason}
+
+⏰ Timeframe: `{self.settings.timeframe}`
+🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
+
+💡 Try again later when conditions align better."""
+
+        return message
+
+💡 **Status:** {signal.reason}
+
+⏰ Timeframe: `{self.settings.timeframe}`
+🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
+
+💡 Try again later when conditions align better."""
+
+        return message
+
+    async def performance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show performance statistics"""
+        await self._send_performance(update.message.chat_id, context)
+
+    async def _send_performance(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+        """Send performance statistics"""
+        stats = self.performance_tracker.get_stats()
+
+        message = f"""
+📈 **Performance Statistics**
+
+📊 **Signal Summary:**
+• Total Signals: `{stats['total_signals']}`
+• Buy Signals: `{stats['buy_signals']}`
+• Sell Signals: `{stats['sell_signals']}`
+• Avg Confidence: `{stats['avg_confidence']}%`
+
+🕐 **Last Signal:** {stats['last_signal']}
+
+⚙️ **Current Settings:**
+• Scan Interval: `{self.settings.interval_minutes} minutes`
+• Timeframe: `{self.settings.timeframe}`
+• Auto Alerts: `{'ON' if self.settings.auto_alerts else 'OFF'}`
+• TP Range: `{self.settings.tp_pips_min}-{self.settings.tp_pips_max} pips`
+• SL Range: `{self.settings.sl_pips_min}-{self.settings.sl_pips_max} pips`
+
+💡 Performance tracking helps you evaluate signal quality over time.
+        """
+
+        await context.bot.send_message(chat_id, message, parse_mode='Markdown')
+
+    async def _send_settings(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+        """Send current settings"""
+        message = f"""
+⚙️ **Bot Configuration**
+
+**Current Settings:**
+• Scan Interval: `{self.settings.interval_minutes} minutes`
+• Timeframe: `{self.settings.timeframe}`
+• Auto Alerts: `{'✅ ON' if self.settings.auto_alerts else '❌ OFF'}`
+• Take Profit: `{self.settings.tp_pips_min}-{self.settings.tp_pips_max} pips`
+• Stop Loss: `{self.settings.sl_pips_min}-{self.settings.sl_pips_max} pips`
+
+**Available Commands:**
+• `/set_interval [15-60]` - Change scan interval
+• `/timeframe [15min|30min|1h]` - Change timeframe
+• `/alerts [on|off]` - Toggle auto alerts
+• `/config` - Show this settings page
+
+**Examples:**
+• `/set_interval 30` - Scan every 30 minutes
+• `/alerts on` - Enable auto notifications
+• `/timeframe 30min` - Use 30-minute candles
+        """
+
+        await context.bot.send_message(chat_id, message, parse_mode='Markdown')
+
+    async def set_interval_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Set scanning interval"""
+        if not context.args:
+            await update.message.reply_text(
+                f"Current interval: `{self.settings.interval_minutes} minutes`\n"
+                "Usage: `/set_interval [15-60]`",
                 parse_mode='Markdown'
             )
-        elif query.data == "stats":
-            # Simulate update object for stats command
-            update_obj = type('obj', (object,), {'message': query.message})()
-            context_obj = type('obj', (object,), {})()
-            await self.stats_command(update_obj, context_obj)
-        elif query.data == "help":
-            await self.help_command(update, context)
-    
-    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle errors"""
-        logger.error(f"Update {update} caused error {context.error}")
-    
-    def run(self):
-        """Start the bot"""
+            return
+
         try:
-            # Initialize predictor
-            logger.info("🤖 Initializing Professional Football Prediction Bot...")
-            
-            if not self.predictor.train_model():
-                logger.error("Failed to initialize prediction model")
-                return
-            
-            # Create application
-            self.application = Application.builder().token(self.token).build()
-            
-            # Create conversation handler for predictions
-            prediction_handler = ConversationHandler(
-                entry_points=[CommandHandler('predict', self.predict_start)],
-                states={
-                    TEAM_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_teams)],
-                    STATS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_stats)],
-                },
-                fallbacks=[CommandHandler('cancel', self.cancel)],
+            new_interval = int(context.args[0])
+            if 15 <= new_interval <= 60:
+                self.settings.interval_minutes = new_interval
+                self._save_settings()
+
+                # Restart auto alerts if enabled
+                if self.settings.auto_alerts:
+                    await self._restart_auto_alerts()
+
+                await update.message.reply_text(
+                    f"✅ Scan interval updated to `{new_interval} minutes`",
+                    parse_mode='Markdown'
+                )
+            else:
+                await update.message.reply_text("❌ Interval must be between 15-60 minutes")
+        except ValueError:
+            await update.message.reply_text("❌ Please provide a valid number")
+
+    async def timeframe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Set analysis timeframe"""
+        if not context.args:
+            await update.message.reply_text(
+                f"Current timeframe: `{self.settings.timeframe}`\n"
+                "Usage: `/timeframe [15min|30min|1h]`",
+                parse_mode='Markdown'
             )
-            
-            # Add handlers
-            self.application.add_handler(CommandHandler("start", self.start))
-            self.application.add_handler(prediction_handler)
-            self.application.add_handler(CommandHandler("stats", self.stats_command))
-            self.application.add_handler(CommandHandler("help", self.help_command))
-            self.application.add_handler(CallbackQueryHandler(self.button_callback))
-            
-            # Add error handler
-            self.application.add_error_handler(self.error_handler)
-            
-            logger.info("💰 PROFESSIONAL FOOTBALL PREDICTION BOT STARTED! 💰")
-            
-            # Start bot
-            self.application.run_polling(allowed_updates=Update.ALL_TYPES)
-            
-        except Exception as e:
-            logger.error(f"Error starting bot: {e}")
+            return
+
+        new_timeframe = context.args[0].lower()
+        valid_timeframes = ["15min", "30min", "1h"]
+
+        if new_timeframe in valid_timeframes:
+            self.settings.timeframe = new_timeframe
+            self._save_settings()
+            await update.message.reply_text(
+                f"✅ Timeframe updated to `{new_timeframe}`",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Invalid timeframe. Use: {', '.join(valid_timeframes)}"
+            )
+
+    async def alerts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Toggle auto alerts"""
+        if not context.args:
+            status = "ON" if self.settings.auto_alerts else "OFF"
+            await update.message.reply_text(
+                f"Auto alerts: `{status}`\n"
+                "Usage: `/alerts [on|off]`",
+                parse_mode='Markdown'
+            )
+            return
+
+        setting = context.args[0].lower()
+        user_id = update.effective_user.id
+
+        if setting == "on":
+            self.settings.auto_alerts = True
+            self.settings.subscribed_users.add(user_id)
+            self._save_settings()
+            await self._start_auto_alerts()
+            await update.message.reply_text("✅ Auto alerts enabled! You'll receive notifications when new signals are detected.")
+        elif setting == "off":
+            if user_id in self.settings.subscribed_users:
+                self.settings.subscribed_users.remove(user_id)
+
+            # If no users subscribed, disable auto alerts
+            if not self.settings.subscribed_users:
+                self.settings.auto_alerts = False
+                await self._stop_auto_alerts()
+
+            self._save_settings()
+            await update.message.reply_text("❌ Auto alerts disabled for you.")
+        else:
+            await update.message.reply_text("❌ Use 'on' or 'off' with the alerts command")
+
+    async def config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show configuration"""
+        await self._send_settings(update.message.chat_id, context)
+
+    async def _start_auto_alerts(self):
+        """Start automatic alert system"""
+        if self.auto_alert_task is None or self.auto_alert_task.done():
+            self.auto_alert_task = asyncio.create_task(self._auto_alert_loop())
+            logger.info("Auto alerts started")
+
+    async def _stop_auto_alerts(self):
+        """Stop automatic alert system"""
+        if self.auto_alert_task and not self.auto_alert_task.done():
+            self.auto_alert_task.cancel()
+            logger.info("Auto alerts stopped")
+
+    async def _restart_auto_alerts(self):
+        """Restart auto alerts with new interval"""
+        if self.settings.auto_alerts:
+            await self._stop_auto_alerts()
+            await self._start_auto_alerts()
+
+    async def _auto_alert_loop(self):
+        """Background task for automatic alerts"""
+        while self.settings.auto_alerts and self.settings.subscribed_users:
+            try:
+                # Analyze market
+                candles = await self.data_provider.get_candles(
+                    symbol="EUR/USD",
+                    interval=self.settings.timeframe,
+                    count=100
+                )
+
+                if candles:
+                    signal = self.signal_generator.generate_signal(candles, "EUR/USD")
+
+                    # Send alert only if signal changed and is not NONE
+                    if (signal.action != self.last_signal_action and 
+                        signal.action != SignalType.NONE):
+
+                        self.performance_tracker.log_signal(signal)
+                        message = f"🚨 **AUTO ALERT**\n\n{self._format_signal_message(signal, 'EURUSD')}"
+
+                        # Send to all subscribed users
+                        for user_id in self.settings.subscribed_users.copy():
+                            try:
+                                await self.application.bot.send_message(
+                                    user_id, message, parse_mode='Markdown'
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to send alert to user {user_id}: {e}")
+                                # Remove user if chat not found
+                                if "chat not found" in str(e).lower():
+                                    self.settings.subscribed_users.discard(user_id)
+
+                        self._save_settings()
+                        self.last_signal_action = signal.action
+                        logger.info(f"Sent auto alert: {signal.action.value}")
+
+                # Wait for next scan
+                await asyncio.sleep(self.settings.interval_minutes * 60)
+
+            except asyncio.CancelledError:
+                logger.info("Auto alert loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in auto alert loop: {e}")
+                await asyncio.sleep(60)  # Wait 1 minute before retry
+
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Enhanced help command"""
+        help_message = """
+📚 **Smart Forex Signal Bot v2.0 - Help**
+
+**🆕 Enhanced Features:**
+• 💰 **TP/SL Suggestions** - Smart profit targets & risk management
+• ⏰ **Auto Alerts** - Background scanning every 15-60 minutes
+• 📊 **Performance Tracking** - Win/loss statistics & signal history
+• 🔧 **Multiple Indicators** - RSI + EMA + MACD + S/R + Patterns
+• ⚙️ **Customizable Settings** - Adjust intervals, timeframes, and alerts
+
+**📱 Commands:**
+• `/start` - Welcome & quick access menu
+• `/analyze` - Manual market analysis
+• `/performance` - View trading statistics
+• `/alerts [on/off]` - Toggle auto notifications
+• `/set_interval [15-60]` - Change scan frequency
+• `/timeframe [15min|30min|1h]` - Set analysis timeframe
+• `/config` - Show current settings
+
+**🎯 Signal Types:**
+🟢 **BUY** - Oversold + Support + Bullish patterns + EMA/MACD confirmation
+🔴 **SELL** - Overbought + Resistance + Bearish patterns + EMA/MACD confirmation
+⚪ **NO SIGNAL** - Conditions don't meet 60%+ confidence threshold
+
+**💰 Trade Management:**
+• Take Profit: 20-40 pips (automatically calculated)
+• Stop Loss: 15-25 pips (risk management)
+• High confidence signals only (60%+ threshold)
+
+**📈 Performance Tracking:**
+All signals are logged with timestamps, entry prices, TP/SL levels, and outcomes for performance analysis.
+
+The bot focuses on quality over quantity - only the strongest setups!
+        """
+        await update.message.reply_text(help_message, parse_mode='Markdown')
+
+    def run(self):
+        """Start the enhanced bot"""
+        # Create application
+        self.application = Application.builder().token(self.telegram_token).build()
+
+        # Add handlers
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("analyze", self.analyze_command))
+        self.application.add_handler(CommandHandler("performance", self.performance_command))
+        self.application.add_handler(CommandHandler("set_interval", self.set_interval_command))
+        self.application.add_handler(CommandHandler("timeframe", self.timeframe_command))
+        self.application.add_handler(CommandHandler("alerts", self.alerts_command))
+        self.application.add_handler(CommandHandler("config", self.config_command))
+        self.application.add_handler(CallbackQueryHandler(self.button_callback))
+
+        # Start auto alerts if enabled
+        if self.settings.auto_alerts and self.settings.subscribed_users:
+            asyncio.create_task(self._start_auto_alerts())
+
+        # Start the bot
+        logger.info("Starting Enhanced Forex Telegram Bot v2.0...")
+        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 def main():
-    """Main function"""
-    # Bot token - replace with your actual token
-    BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"
-    
-    if not BOT_TOKEN:
-        logger.error("Bot token not provided")
+    """Main function to run the enhanced bot"""
+    # Configuration - Replace with your actual tokens
+    TELEGRAM_BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"
+    TWELVEDATA_API_KEY = "YOUR_TWELVEDATA_API_KEY_HERE"  # Optional
+
+    # Validate token
+    if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
+        logger.error("Please set your Telegram bot token in the TELEGRAM_BOT_TOKEN variable")
+        print("\n🔑 SETUP REQUIRED:")
+        print("1. Get bot token from @BotFather on Telegram")
+        print("2. Replace 'YOUR_TELEGRAM_BOT_TOKEN_HERE' with your actual token")
+        print("3. Optionally get TwelveData API key for real market data")
+        print("4. Run: pip install python-telegram-bot requests numpy")
         return
-    
-    bot = FootballBot(BOT_TOKEN)
-    bot.run()
+
+    try:
+        # Create and run enhanced bot
+        bot = ForexTelegramBot(
+            telegram_token=TELEGRAM_BOT_TOKEN,
+            api_key=TWELVEDATA_API_KEY if TWELVEDATA_API_KEY != "YOUR_TWELVEDATA_API_KEY_HERE" else None
+        )
+        bot.run()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed: {e}")
 
 if __name__ == "__main__":
     main()

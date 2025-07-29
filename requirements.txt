@@ -1,0 +1,10 @@
+python-telegram-bot==20.7
+pandas
+numpy
+scikit-learn
+scipy
+joblib
+telegram
+requests
+nest-asyncio
+yfinance
