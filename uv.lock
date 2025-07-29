@@ -213,6 +213,7 @@ name = "python-template"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "joblib" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "python-telegram-bot" },
@@ -223,6 +224,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "joblib", specifier = ">=1.5.1" },
     { name = "numpy", specifier = ">=2.3.1" },
     { name = "pandas", specifier = ">=2.3.1" },
     { name = "python-telegram-bot", specifier = "==20.3" },

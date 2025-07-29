@@ -5,6 +5,7 @@ description = ""
 authors = ["Your Name <you@example.com>"]
 requires-python = ">=3.11"
 dependencies = [
+    "joblib>=1.5.1",
     "numpy>=2.3.1",
     "pandas>=2.3.1",
     "python-telegram-bot==20.3",
