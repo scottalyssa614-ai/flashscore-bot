@@ -1,0 +1,21 @@
+{
+  "interval_minutes": 8,
+  "timeframe": "15min",
+  "live_monitoring": true,
+  "enforce_market_hours": true,
+  "require_patterns": true,
+  "min_pattern_confidence": 70.0,
+  "feedback_enabled": true,
+  "subscribed_users": [
+    7565367210
+  ],
+  "monitored_pairs": [
+    "GBP/USD",
+    "EUR/USD",
+    "USD/CHF",
+    "AUD/USD",
+    "USD/JPY",
+    "NZD/USD",
+    "USD/CAD"
+  ]
+}

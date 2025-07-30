@@ -1,0 +1,74 @@
+2025-07-30 08:56:01,748 - asyncio - DEBUG - Using selector: EpollSelector
+2025-07-30 08:56:01,749 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-07-30 08:56:01,749 - httpx - DEBUG - load_verify_locations cafile='/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/certifi/cacert.pem'
+2025-07-30 08:56:01,755 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-07-30 08:56:01,756 - httpx - DEBUG - load_verify_locations cafile='/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/certifi/cacert.pem'
+2025-07-30 08:56:01,764 - __main__ - INFO - 🔍 Starting enhanced scan cycle - London, Market: ✅ ACTIVE
+2025-07-30 08:56:01,764 - __main__ - INFO - 🔄 Processing enhanced batch 1: EURAUD, USDHKD, USDNOK, AUDCHF, USDCHF, USDSGD
+2025-07-30 08:56:01,766 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api.twelvedata.com:443
+2025-07-30 08:56:01,920 - urllib3.connectionpool - DEBUG - https://api.twelvedata.com:443 "GET /time_series?symbol=EURAUD&interval=15min&outputsize=100&format=JSON&apikey=YOUR_TWELVEDATA_API_KEY HTTP/1.1" 200 None
+2025-07-30 08:56:01,921 - __main__ - ERROR - API failure for EURAUD: No 'values' in response. Response: {'code': 401, 'message': '**apikey** parameter is incorrect or not specified. You can get your free API key instantly following this link: https://twelvedata.com/pricing. If you believe that everything is correct, you can contact us at https://twelvedata.com/contact/customer', 'status': 'error'}
+2025-07-30 08:56:01,921 - __main__ - INFO - Using enhanced mock data for EURAUD
+2025-07-30 08:56:01,928 - __main__ - DEBUG - Analyzing EURAUD - Session: London
+2025-07-30 08:56:01,933 - __main__ - DEBUG - EURAUD Technical Indicators:
+2025-07-30 08:56:01,933 - __main__ - DEBUG -   RSI: 41.17
+2025-07-30 08:56:01,933 - __main__ - DEBUG -   EMA20: 0.96491
+2025-07-30 08:56:01,933 - __main__ - DEBUG -   EMA50: 0.96331
+2025-07-30 08:56:01,933 - __main__ - DEBUG -   MACD: 0.00087
+2025-07-30 08:56:01,933 - __main__ - DEBUG -   MACD Signal: 0.00127
+2025-07-30 08:56:01,933 - __main__ - DEBUG -   Bullish Patterns: None
+2025-07-30 08:56:01,933 - __main__ - DEBUG -   Bearish Patterns: None
+2025-07-30 08:56:01,933 - telegram.ext.ExtBot - DEBUG - Entering: send_message
+Traceback (most recent call last):
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/telegram/ext/_application.py", line 1006, in __run
+    raise exc
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/telegram/ext/_application.py", line 995, in __run
+    loop.run_until_complete(self.initialize())
+  File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/asyncio/base_events.py", line 630, in run_until_complete
+    self._check_running()
+  File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/asyncio/base_events.py", line 589, in _check_running
+    raise RuntimeError('This event loop is already running')
+RuntimeError: This event loop is already running
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/telegram/ext/_application.py", line 1017, in __run
+    loop.run_until_complete(self.shutdown())
+  File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/asyncio/base_events.py", line 630, in run_until_complete
+    self._check_running()
+  File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/asyncio/base_events.py", line 589, in _check_running
+    raise RuntimeError('This event loop is already running')
+RuntimeError: This event loop is already running
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/runner/workspace/main.py", line 1330, in <module>
+    main()
+  File "/home/runner/workspace/main.py", line 1327, in main
+    asyncio.run(bot.start())
+  File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/main.py", line 1321, in start
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/telegram/ext/_application.py", line 818, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/telegram/ext/_application.py", line 1022, in __run
+    loop.close()
+  File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+sys:1: RuntimeWarning: coroutine 'Application.shutdown' was never awaited
+sys:1: RuntimeWarning: coroutine 'Application.initialize' was never awaited

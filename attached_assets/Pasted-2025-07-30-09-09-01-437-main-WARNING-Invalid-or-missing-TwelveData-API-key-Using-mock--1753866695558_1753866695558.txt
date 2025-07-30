@@ -1,0 +1,30 @@
+2025-07-30 09:09:01,437 - __main__ - WARNING - ⚠️ Invalid or missing TwelveData API key. Using mock data. Get a valid key at https://twelvedata.com/pricing
+2025-07-30 09:09:01,438 - asyncio - DEBUG - Using selector: EpollSelector
+2025-07-30 09:09:01,439 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-07-30 09:09:01,439 - httpx - DEBUG - load_verify_locations cafile='/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/certifi/cacert.pem'
+2025-07-30 09:09:01,463 - httpx - DEBUG - load_ssl_context verify=True cert=None trust_env=True http2=False
+2025-07-30 09:09:01,464 - httpx - DEBUG - load_verify_locations cafile='/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/certifi/cacert.pem'
+2025-07-30 09:09:01,475 - __main__ - ERROR - Error running bot: Cannot close a running event loop
+2025-07-30 09:09:01,475 - telegram.ext.Application - DEBUG - This Application is already shut down. Returning.
+/home/runner/workspace/main.py:1432: RuntimeWarning: coroutine 'Application.shutdown' was never awaited
+  await self.application.shutdown()
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+/home/runner/workspace/main.py:1432: RuntimeWarning: coroutine 'Application.initialize' was never awaited
+  await self.application.shutdown()
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+2025-07-30 09:09:01,477 - __main__ - INFO - 🔍 Starting enhanced scan cycle - London, Market: ✅ ACTIVE
+2025-07-30 09:09:01,477 - __main__ - INFO - 🔄 Processing enhanced batch 1: USD/CAD, NZD/USD, AUD/USD, GBP/USD, EUR/USD, USD/JPY
+2025-07-30 09:09:01,479 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api.twelvedata.com:443
+2025-07-30 09:09:01,638 - urllib3.connectionpool - DEBUG - https://api.twelvedata.com:443 "GET /time_series?symbol=USD%2FCAD&interval=15min&outputsize=100&format=JSON HTTP/1.1" 200 None
+2025-07-30 09:09:01,638 - __main__ - ERROR - API failure for USD/CAD: No 'values' in response. Response: {'code': 401, 'message': '**apikey** parameter is incorrect or not specified. You can get your free API key instantly following this link: https://twelvedata.com/pricing. If you believe that everything is correct, you can contact us at https://twelvedata.com/contact/customer', 'status': 'error'}
+2025-07-30 09:09:01,638 - __main__ - INFO - Using enhanced mock data for USD/CAD
+2025-07-30 09:09:01,664 - __main__ - DEBUG - Analyzing USD/CAD - Session: London
+2025-07-30 09:09:01,668 - __main__ - DEBUG - USD/CAD Technical Indicators:
+2025-07-30 09:09:01,668 - __main__ - DEBUG -   RSI: 51.39
+2025-07-30 09:09:01,668 - __main__ - DEBUG -   EMA20: 1.13013
+2025-07-30 09:09:01,668 - __main__ - DEBUG -   EMA50: 1.12984
+2025-07-30 09:09:01,668 - __main__ - DEBUG -   MACD: 0.00023
+2025-07-30 09:09:01,668 - __main__ - DEBUG -   MACD Signal: 0.00030
+2025-07-30 09:09:01,668 - __main__ - DEBUG -   Bullish Patterns: None
+2025-07-30 09:09:01,668 - __main__ - DEBUG -   Best Bearish Pattern: Bearish Engulfing (95.0%)
+2025-07-30 09:09:01,669 - telegram.ext.ExtBot - DEBUG - Entering: send_message
