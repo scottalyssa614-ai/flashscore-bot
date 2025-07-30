@@ -1787,6 +1787,10 @@ The enhanced bot requires ALL conditions to be met for maximum accuracy!"""
         except ValueError:
             await update.message.reply_text("❌ Please provide a valid number")
 
+    async def performance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Enhanced performance command"""
+        await self._send_enhanced_performance(update.message.chat_id, context)
+
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Enhanced help command"""
         await update.message.reply_text(help_message, parse_mode='Markdown')
