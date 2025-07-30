@@ -6,10 +6,10 @@
     7565367210
   ],
   "monitored_pairs": [
-    "USDJPY",
-    "GBPUSD",
-    "GBPJPY",
-    "EURUSD",
-    "EURJPY"
+    "USD/JPY",
+    "GBP/USD",
+    "GBP/JPY",
+    "EUR/USD",
+    "EUR/JPY"
   ]
 }
