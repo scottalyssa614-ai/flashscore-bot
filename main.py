@@ -645,6 +645,21 @@ class ForexTelegramBot:
         self.last_signal_action = SignalType.NONE
         self.auto_alert_task = None
         self.application = None
+        
+        # Track last signal for each pair to avoid spam
+        self.last_signals_per_pair = {}
+        
+        # Default monitored pairs
+        self.monitored_pairs = [
+            ("EURUSD", "EUR/USD"),
+            ("GBPUSD", "GBP/USD"), 
+            ("USDJPY", "USD/JPY"),
+            ("GBPJPY", "GBP/JPY"),
+            ("EURJPY", "EUR/JPY"),
+            ("AUDUSD", "AUD/USD"),
+            ("USDCAD", "USD/CAD"),
+            ("NZDUSD", "NZD/USD")
+        ]
 
         # Load settings
         self._load_settings()
@@ -655,10 +670,22 @@ class ForexTelegramBot:
             if os.path.exists("bot_settings.json"):
                 with open("bot_settings.json", 'r') as f:
                     data = json.load(f)
-                    self.settings.interval_minutes = data.get("interval_minutes", 15)
+                    self.settings.interval_minutes = data.get("interval_minutes", 5)
                     self.settings.timeframe = data.get("timeframe", "15min")
-                    self.settings.auto_alerts = data.get("auto_alerts", False)
+                    self.settings.auto_alerts = data.get("live_monitoring", True)
                     self.settings.subscribed_users = set(data.get("subscribed_users", []))
+                    
+                    # Load monitored pairs if available
+                    if "monitored_pairs" in data:
+                        pairs_from_file = data["monitored_pairs"]
+                        self.monitored_pairs = []
+                        for pair in pairs_from_file:
+                            if isinstance(pair, str):
+                                # Convert single string to tuple format
+                                cleaned = pair.replace('/', '').upper()
+                                api_format = f"{cleaned[:3]}/{cleaned[3:]}"
+                                self.monitored_pairs.append((cleaned, api_format))
+                            
         except Exception as e:
             logger.error(f"Error loading settings: {e}")
 
@@ -668,8 +695,9 @@ class ForexTelegramBot:
             data = {
                 "interval_minutes": self.settings.interval_minutes,
                 "timeframe": self.settings.timeframe,
-                "auto_alerts": self.settings.auto_alerts,
-                "subscribed_users": list(self.settings.subscribed_users)
+                "live_monitoring": self.settings.auto_alerts,
+                "subscribed_users": list(self.settings.subscribed_users),
+                "monitored_pairs": [pair[1] for pair in self.monitored_pairs]
             }
             with open("bot_settings.json", 'w') as f:
                 json.dump(data, f, indent=2)
@@ -689,27 +717,35 @@ class ForexTelegramBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        welcome_message = """
+        monitoring_status = "🟢 ACTIVE" if self.settings.auto_alerts else "🔴 INACTIVE"
+        pairs_list = ", ".join([pair[0] for pair in self.monitored_pairs[:4]]) + "..."
+        
+        welcome_message = f"""
 🤖 **Welcome to Smart Forex Signal Bot v2.0!**
 
-🆕 **New Features:**
+📡 **Live Monitoring:** {monitoring_status}
+💱 **Watching:** {pairs_list}
+⏱️ **Scan Interval:** {self.settings.interval_minutes} minutes
+
+🆕 **Enhanced Features:**
+• 🔄 **Live Multi-Currency Scanning** - Constant market monitoring
 • 💰 Take Profit & Stop Loss suggestions
-• ⏰ Auto alerts every 15-30 minutes
 • 📊 Performance tracking & statistics
-• 🔧 Enhanced indicators (EMA, MACD)
+• 🔧 Enhanced indicators (RSI + EMA + MACD + S/R + Patterns)
 • ⚙️ Customizable settings
 
 **Available Commands:**
-• `/analyze` - Get current market analysis
+• `/analyze [PAIR]` - Manual analysis
 • `/performance` - View trading statistics
-• `/set_interval [minutes]` - Set auto-scan interval
+• `/alerts [on/off]` - Toggle live monitoring
+• `/set_interval [5-60]` - Change scan frequency
 • `/config` - Show current settings
-• `/alerts [on/off]` - Toggle auto alerts
 
-**Enhanced Analysis:**
-✅ RSI + EMA 20/50 + MACD + S/R + Patterns
-✅ Smart TP/SL calculation (20-40 pips TP, 15-25 pips SL)
+**Monitored Pairs:**
+{', '.join([pair[0] for pair in self.monitored_pairs])}
+
 ✅ High-confidence signals only (60%+ threshold)
+✅ Real-time alerts when conditions are met
 
 Choose an option below or type a command!
         """
@@ -862,6 +898,9 @@ Choose an option below or type a command!
         """Send performance statistics"""
         stats = self.performance_tracker.get_stats()
 
+        monitoring_status = "🟢 ACTIVE" if self.settings.auto_alerts else "🔴 INACTIVE"
+        pairs_count = len(self.monitored_pairs)
+        
         message = f"""
 📈 **Performance Statistics**
 
@@ -873,14 +912,18 @@ Choose an option below or type a command!
 
 🕐 **Last Signal:** {stats['last_signal']}
 
-⚙️ **Current Settings:**
+⚙️ **Live Monitoring Settings:**
+• Status: {monitoring_status}
+• Monitored Pairs: `{pairs_count} pairs`
 • Scan Interval: `{self.settings.interval_minutes} minutes`
 • Timeframe: `{self.settings.timeframe}`
-• Auto Alerts: `{'ON' if self.settings.auto_alerts else 'OFF'}`
 • TP Range: `{self.settings.tp_pips_min}-{self.settings.tp_pips_max} pips`
 • SL Range: `{self.settings.sl_pips_min}-{self.settings.sl_pips_max} pips`
 
-💡 Performance tracking helps you evaluate signal quality over time.
+📡 **Monitored Pairs:**
+{', '.join([pair[0] for pair in self.monitored_pairs])}
+
+💡 The bot continuously scans all pairs for trading opportunities!
         """
 
         await context.bot.send_message(chat_id, message, parse_mode='Markdown')
@@ -923,20 +966,21 @@ Choose an option below or type a command!
 
         try:
             new_interval = int(context.args[0])
-            if 15 <= new_interval <= 60:
+            if 5 <= new_interval <= 60:
                 self.settings.interval_minutes = new_interval
                 self._save_settings()
 
-                # Restart auto alerts if enabled
+                # Restart live monitoring if enabled
                 if self.settings.auto_alerts:
                     await self._restart_auto_alerts()
 
                 await update.message.reply_text(
-                    f"✅ Scan interval updated to `{new_interval} minutes`",
+                    f"✅ Live scan interval updated to `{new_interval} minutes`\n"
+                    f"📡 Monitoring {len(self.monitored_pairs)} currency pairs",
                     parse_mode='Markdown'
                 )
             else:
-                await update.message.reply_text("❌ Interval must be between 15-60 minutes")
+                await update.message.reply_text("❌ Interval must be between 5-60 minutes")
         except ValueError:
             await update.message.reply_text("❌ Please provide a valid number")
 
@@ -966,12 +1010,15 @@ Choose an option below or type a command!
             )
 
     async def alerts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Toggle auto alerts"""
+        """Toggle live monitoring alerts"""
         if not context.args:
-            status = "ON" if self.settings.auto_alerts else "OFF"
+            status = "🟢 ACTIVE" if self.settings.auto_alerts else "🔴 INACTIVE"
+            pairs_count = len(self.monitored_pairs)
             await update.message.reply_text(
-                f"Auto alerts: `{status}`\n"
-                "Usage: `/alerts [on|off]`",
+                f"📡 **Live Monitoring:** {status}\n"
+                f"💱 **Monitoring:** `{pairs_count} currency pairs`\n"
+                f"⏱️ **Scan Interval:** `{self.settings.interval_minutes} minutes`\n\n"
+                "**Usage:** `/alerts [on|off]`",
                 parse_mode='Markdown'
             )
             return
@@ -984,7 +1031,13 @@ Choose an option below or type a command!
             self.settings.subscribed_users.add(user_id)
             self._save_settings()
             await self._start_auto_alerts()
-            await update.message.reply_text("✅ Auto alerts enabled! You'll receive notifications when new signals are detected.")
+            pairs_list = ', '.join([pair[0] for pair in self.monitored_pairs])
+            await update.message.reply_text(
+                f"✅ **Live monitoring activated!**\n\n"
+                f"🔄 Scanning {len(self.monitored_pairs)} pairs every {self.settings.interval_minutes} minutes:\n"
+                f"`{pairs_list}`\n\n"
+                f"You'll receive real-time alerts when trading conditions are met!"
+            )
         elif setting == "off":
             if user_id in self.settings.subscribed_users:
                 self.settings.subscribed_users.remove(user_id)
@@ -995,7 +1048,7 @@ Choose an option below or type a command!
                 await self._stop_auto_alerts()
 
             self._save_settings()
-            await update.message.reply_text("❌ Auto alerts disabled for you.")
+            await update.message.reply_text("🔴 Live monitoring disabled for you.")
         else:
             await update.message.reply_text("❌ Use 'on' or 'off' with the alerts command")
 
@@ -1022,50 +1075,79 @@ Choose an option below or type a command!
             await self._start_auto_alerts()
 
     async def _auto_alert_loop(self):
-        """Background task for automatic alerts"""
+        """Background task for live multi-currency monitoring"""
+        logger.info(f"Starting live monitoring for {len(self.monitored_pairs)} currency pairs")
+        
         while self.settings.auto_alerts and self.settings.subscribed_users:
             try:
-                # Analyze market
-                candles = await self.data_provider.get_candles(
-                    symbol="EUR/USD",
-                    interval=self.settings.timeframe,
-                    count=100
-                )
+                signals_found = []
+                
+                # Scan all monitored pairs
+                for display_pair, api_pair in self.monitored_pairs:
+                    try:
+                        logger.info(f"Scanning {display_pair}...")
+                        
+                        # Get market data
+                        candles = await self.data_provider.get_candles(
+                            symbol=api_pair,
+                            interval=self.settings.timeframe,
+                            count=100
+                        )
 
-                if candles:
-                    signal = self.signal_generator.generate_signal(candles, "EUR/USD")
+                        if candles:
+                            signal = self.signal_generator.generate_signal(candles, api_pair)
+                            
+                            # Check if this is a new signal for this pair
+                            last_signal_for_pair = self.last_signals_per_pair.get(display_pair, SignalType.NONE)
+                            
+                            if (signal.action != SignalType.NONE and 
+                                signal.action != last_signal_for_pair and
+                                signal.confidence >= 60):  # Only high confidence signals
+                                
+                                signals_found.append((signal, display_pair))
+                                self.last_signals_per_pair[display_pair] = signal.action
+                                self.performance_tracker.log_signal(signal)
+                                
+                                logger.info(f"🎯 NEW SIGNAL: {signal.action.value} for {display_pair} ({signal.confidence}%)")
+                        
+                        # Small delay between pairs to avoid rate limiting
+                        await asyncio.sleep(2)
+                        
+                    except Exception as pair_error:
+                        logger.error(f"Error analyzing {display_pair}: {pair_error}")
+                        continue
 
-                    # Send alert only if signal changed and is not NONE
-                    if (signal.action != self.last_signal_action and 
-                        signal.action != SignalType.NONE):
-
-                        self.performance_tracker.log_signal(signal)
-                        message = f"🚨 **AUTO ALERT**\n\n{self._format_signal_message(signal, 'EURUSD')}"
-
+                # Send alerts for all found signals
+                if signals_found:
+                    for signal, display_pair in signals_found:
+                        message = f"🚨 **LIVE SIGNAL DETECTED**\n\n{self._format_signal_message(signal, display_pair)}"
+                        
                         # Send to all subscribed users
                         for user_id in self.settings.subscribed_users.copy():
                             try:
                                 await self.application.bot.send_message(
                                     user_id, message, parse_mode='Markdown'
                                 )
+                                await asyncio.sleep(0.5)  # Avoid flooding
                             except Exception as e:
                                 logger.error(f"Failed to send alert to user {user_id}: {e}")
-                                # Remove user if chat not found
                                 if "chat not found" in str(e).lower():
                                     self.settings.subscribed_users.discard(user_id)
+                    
+                    self._save_settings()
+                    logger.info(f"Sent {len(signals_found)} live alerts")
+                else:
+                    logger.info(f"No signals found in this scan cycle")
 
-                        self._save_settings()
-                        self.last_signal_action = signal.action
-                        logger.info(f"Sent auto alert: {signal.action.value}")
-
-                # Wait for next scan
+                # Wait for next full scan cycle
+                logger.info(f"Waiting {self.settings.interval_minutes} minutes for next scan...")
                 await asyncio.sleep(self.settings.interval_minutes * 60)
 
             except asyncio.CancelledError:
-                logger.info("Auto alert loop cancelled")
+                logger.info("Live monitoring cancelled")
                 break
             except Exception as e:
-                logger.error(f"Error in auto alert loop: {e}")
+                logger.error(f"Error in live monitoring loop: {e}")
                 await asyncio.sleep(60)  # Wait 1 minute before retry
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
