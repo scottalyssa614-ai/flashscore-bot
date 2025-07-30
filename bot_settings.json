@@ -7,9 +7,9 @@
   ],
   "monitored_pairs": [
     "EURJPY",
+    "GBPJPY",
     "USDJPY",
     "EURUSD",
-    "GBPUSD",
-    "GBPJPY"
+    "GBPUSD"
   ]
 }
