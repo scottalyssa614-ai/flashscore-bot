@@ -1,634 +1,5 @@
-"""Toggle live monitoring on/off"""
-        user_id = update.effective_user.id
 
-        if not context.args:
-            status = "ON" if self.settings.live_monitoring else "OFF"
-            await update.message.reply_text(
-                f"**🔄 Live Multi-Market Monitoring:** `{status}`\n\n"
-                f"**Currently monitoring:** {len(self.settings.monitored_pairs)} pairs\n"
-                f"**Scan interval:** {self.settings.interval_minutes} minutes\n\n"
-                "**Usage:** `/live [on|off]`",
-                parse_mode='Markdown'
-            )
-            return
-
-        setting = context.args[0].lower()
-
-        if setting == "on":
-            self.settings.live_monitoring = True
-            self.settings.subscribed_users.add(user_id)
-            self._save_settings()
-            await self._start_live_monitoring()
-
-            # Get category breakdown for the message
-            categories = CurrencyPairValidator.get_pairs_by_category()
-            major_count = len([p for p in self.settings.monitored_pairs if p in categories["Majors"]])
-            cross_count = len([p for p in self.settings.monitored_pairs if p in categories["Popular Crosses"]])
-            minor_count = len([p for p in self.settings.monitored_pairs if p in categories["Minors"]])
-
-            await update.message.reply_text(
-                f"🟢 **Live Multi-Market Monitoring ACTIVATED!**\n\n"
-                f"📊 **Monitoring {len(self.settings.monitored_pairs)} pairs:**\n"
-                f"• 🏛️ Majors: {major_count}\n"
-                f"• 🔄 Crosses: {cross_count}\n" 
-                f"• 🌍 Minors/Others: {minor_count + (len(self.settings.monitored_pairs) - major_count - cross_count)}\n\n"
-                f"⚡ **Scan frequency:** Every {self.settings.interval_minutes} minutes\n"
-                f"🔔 You'll receive instant alerts from all monitored markets!\n\n"
-                f"**Global coverage active across USD, EUR, GBP, JPY, AUD, CAD, NZD, CHF + exotics!**",
-                parse_mode='Markdown'
-            )
-        elif setting == "off":
-            if user_id in self.settings.subscribed_users:
-                self.settings.subscribed_users.remove(user_id)
-
-            # If no users subscribed, stop monitoring
-            if not self.settings.subscribed_users:
-                self.settings.live_monitoring = False
-                await self._stop_live_monitoring()
-
-            self._save_settings()
-            await update.message.reply_text(
-                "🔴 **Live monitoring DISABLED for you.**\n\n"
-                "Use `/live on` to reactivate instant multi-market alerts.",
-                parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text("❌ Use 'on' or 'off' with the live command")
-
-    async def analyze_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enhanced analyze command with currency pair support and category detection"""
-        # Extract currency pair from command arguments
-        currency_pair = "EURUSD"  # Default
-        if context.args and len(context.args) > 0:
-            user_input = context.args[0]
-            is_valid, api_format, display_format = CurrencyPairValidator.validate_and_format(user_input)
-
-            if not is_valid:
-                await update.message.reply_text(
-                    f"❌ Invalid currency pair: `{user_input}`\n\n"
-                    "**Supported pairs examples:**\n"
-                    "• Majors: EURUSD, GBPUSD, USDJPY\n"
-                    "• Crosses: EURJPY, GBPJPY, AUDJPY\n"
-                    "• Minors: USDSGD, USDSEK, USDNOK\n"
-                    "• Exotics: USDTRY, USDZAR, USDMXN\n\n"
-                    "**Usage:** `/analyze GBPUSD` or just `/analyze` for EURUSD",
-                    parse_mode='Markdown',
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💱 All Supported Pairs", callback_data="all_pairs")]])
-                )
-                return
-
-            currency_pair = display_format
-            api_pair = api_format
-        else:
-            api_pair = "EUR/USD"
-
-        await self._send_analysis(update.message.chat_id, context, currency_pair, api_pair)
-
-    async def _send_analysis(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, 
-                           currency_pair: str = "EURUSD", api_pair: str = "EUR/USD"):
-        """Send market analysis for specified currency pair with category info"""
-        pair_category = CurrencyPairValidator.get_pair_category(currency_pair)
-        await context.bot.send_message(chat_id, f"🔍 Analyzing {currency_pair} ({pair_category})...")
-
-        try:
-            candles = await self.data_provider.get_candles(
-                symbol=api_pair,
-                interval=self.settings.timeframe,
-                count=100
-            )
-
-            if not candles:
-                await context.bot.send_message(chat_id, f"❌ Could not fetch data for {currency_pair}.")
-                return
-
-            signal = self.signal_generator.generate_signal(candles, currency_pair)
-
-            # Log signal if it's not NONE
-            if signal.action != SignalType.NONE:
-                self.performance_tracker.log_signal(signal)
-
-            message = self._format_signal_message(signal, is_live_alert=False)
-            await context.bot.send_message(chat_id, message, parse_mode='Markdown')
-
-        except Exception as e:
-            logger.error(f"Error in analysis: {e}")
-            await context.bot.send_message(chat_id, f"❌ Analysis failed for {currency_pair}. Please try again.")
-
-    def _format_no_signal_summary(self, no_signal_pairs: List[str], scan_time: datetime) -> str:
-        """Format a summary message when no signals are found with category breakdown"""
-        # Organize pairs by category for the summary
-        categories = CurrencyPairValidator.get_pairs_by_category()
-        category_counts = {}
-
-        for pair in no_signal_pairs:
-            category = CurrencyPairValidator.get_pair_category(pair)
-            category_counts[category] = category_counts.get(category, 0) + 1
-
-        category_text = " | ".join([f"{cat}: {count}" for cat, count in category_counts.items()])
-
-        pairs_preview = ", ".join(no_signal_pairs[:8])  # Show first 8 pairs
-        if len(no_signal_pairs) > 8:
-            pairs_preview += f" +{len(no_signal_pairs) - 8} more"
-
-        message = f"""
-📊 **Global Market Scan Complete - No Signals**
-
-⚪ **Status:** No trading conditions met across monitored markets
-🔍 **Pairs Scanned:** {len(no_signal_pairs)} ({category_text})
-⏰ **Scan Time:** {scan_time.strftime('%H:%M UTC')}
-📈 **Timeframe:** {self.settings.timeframe}
-
-**🌍 Markets Analyzed:** {pairs_preview}
-
-💡 **Market Status:** All monitored pairs are in consolidation or weak signal conditions
-🔄 **Next Global Scan:** {self.settings.interval_minutes} minutes
-
-The bot is actively monitoring global markets - you'll get instant alerts when strong signals appear across any currency pair! 📡
-        """
-        return message
-
-    def _format_signal_message(self, signal: TradingSignal, is_live_alert: bool = True) -> str:
-        """Format signal into readable message with pair category info"""
-        currency_pair = signal.currency_pair
-        pair_category = CurrencyPairValidator.get_pair_category(currency_pair)
-
-        # Determine decimal places for display
-        decimals = 3 if 'JPY' in currency_pair else 5
-
-        alert_header = "🚨 **LIVE GLOBAL ALERT** 🚨\n\n" if is_live_alert else ""
-
-        if signal.action == SignalType.BUY:
-            emoji = "🟢"
-            message = f"""{alert_header}📈 **Pair:** {currency_pair} ({pair_category})
-{emoji} **BUY SIGNAL DETECTED**
-
-💰 **Trade Setup:**
-• Entry: `{signal.current_price:.{decimals}f}`
-• 🎯 Take Profit: `{signal.take_profit:.{decimals}f}` (+{signal.tp_pips} pips)
-• 🛑 Stop Loss: `{signal.stop_loss:.{decimals}f}` (-{signal.sl_pips} pips)
-
-📊 **Technical Analysis:**
-• RSI: `{signal.rsi:.1f}`
-• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
-• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
-• Pattern: `{signal.pattern}`
-• Support: `{signal.support_resistance:.{decimals}f}`
-• Confidence: `{signal.confidence:.0f}%`
-
-📈 **Reason:** {signal.reason}
-
-⏰ Timeframe: `{self.settings.timeframe}`
-🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
-🏷️ Category: `{pair_category}`"""
-
-        elif signal.action == SignalType.SELL:
-            emoji = "🔴"
-            message = f"""{alert_header}📈 **Pair:** {currency_pair} ({pair_category})
-{emoji} **SELL SIGNAL DETECTED**
-
-💰 **Trade Setup:**
-• Entry: `{signal.current_price:.{decimals}f}`
-• 🎯 Take Profit: `{signal.take_profit:.{decimals}f}` (+{signal.tp_pips} pips)
-• 🛑 Stop Loss: `{signal.stop_loss:.{decimals}f}` (-{signal.sl_pips} pips)
-
-📊 **Technical Analysis:**
-• RSI: `{signal.rsi:.1f}`
-• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
-• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
-• Pattern: `{signal.pattern}`
-• Resistance: `{signal.support_resistance:.{decimals}f}`
-• Confidence: `{signal.confidence:.0f}%`
-
-📉 **Reason:** {signal.reason}
-
-⏰ Timeframe: `{self.settings.timeframe}`
-🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
-🏷️ Category: `{pair_category}`"""
-
-        else:
-            emoji = "⚪"
-            no_alert_header = "📊 **Manual Analysis**\n\n" if not is_live_alert else ""
-            message = f"""{no_alert_header}📈 **Pair:** {currency_pair} ({pair_category})
-{emoji} **NO SIGNAL**
-
-📊 **Current Analysis:**
-• RSI: `{signal.rsi:.1f}`
-• Current Price: `{signal.current_price:.{decimals}f}`
-• Pattern: `{signal.pattern}`
-
-💡 **Status:** {signal.reason}
-
-⏰ Timeframe: `{self.settings.timeframe}`
-🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
-🏷️ Category: `{pair_category}`
-
-💡 Conditions not strong enough for a signal."""
-
-        return message
-
-    async def performance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show performance statistics"""
-        await self._send_performance(update.message.chat_id, context)
-
-    async def _send_performance(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-        """Send enhanced performance statistics with category breakdown"""
-        stats = self.performance_tracker.get_stats()
-
-        # Format category breakdown
-        category_text = ""
-        if stats['category_breakdown']:
-            for category, count in stats['category_breakdown'].items():
-                category_text += f"• {category}: `{count}` signals\n"
-        else:
-            category_text = "• No signals recorded yet\n"
-
-        message = f"""
-📈 **Live Global Performance Statistics**
-
-📊 **Signal Summary:**
-• Total Signals: `{stats['total_signals']}`
-• Buy Signals: `{stats['buy_signals']}`
-• Sell Signals: `{stats['sell_signals']}`
-• Avg Confidence: `{stats['avg_confidence']}%`
-• Unique Pairs: `{stats['pairs_analyzed']}`
-
-**📊 Signals by Category:**
-{category_text}
-
-🕐 **Last Signal:** {stats['last_signal']}
-
-🔄 **Live Multi-Market Monitoring:**
-• Status: `{'🟢 ACTIVE' if self.settings.live_monitoring else '🔴 INACTIVE'}`
-• Monitored Pairs: `{len(self.settings.monitored_pairs)}`
-• Scan Interval: `{self.settings.interval_minutes} minutes`
-• Batch Size: `{self.scan_batch_size} pairs/batch`
-• Timeframe: `{self.settings.timeframe}`
-• Subscribed Users: `{len(self.settings.subscribed_users)}`
-
-💡 All signals are generated automatically across global markets and sent instantly when conditions are met!
-        """
-
-        await context.bot.send_message(chat_id, message, parse_mode='Markdown')
-
-    async def _send_settings(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-        """Send current settings with enhanced pair info"""
-        # Get category breakdown
-        categories = CurrencyPairValidator.get_pairs_by_category()
-        major_count = len([p for p in self.settings.monitored_pairs if p in categories["Majors"]])
-        cross_count = len([p for p in self.settings.monitored_pairs if p in categories["Popular Crosses"]])
-        minor_count = len([p for p in self.settings.monitored_pairs if p in categories["Minors"]])
-        other_count = len([p for p in self.settings.monitored_pairs if p in categories["Others"]])
-
-        pairs_preview = ", ".join(list(self.settings.monitored_pairs)[:4])
-        if len(self.settings.monitored_pairs) > 4:
-            pairs_preview += f" +{len(self.settings.monitored_pairs) - 4} more"
-
-        message = f"""
-⚙️ **Live Global Bot Configuration**
-
-🔄 **Live Multi-Market Monitoring:**
-• Status: `{'🟢 ACTIVE' if self.settings.live_monitoring else '🔴 INACTIVE'}`
-• Global Scan Interval: `{self.settings.interval_minutes} minutes`
-• Timeframe: `{self.settings.timeframe}`
-• Batch Processing: `{self.scan_batch_size} pairs/batch`
-
-**📊 Monitored Markets ({len(self.settings.monitored_pairs)} pairs):**
-• 🏛️ Majors: `{major_count}`
-• 🔄 Crosses: `{cross_count}`
-• 🌍 Minors: `{minor_count}`
-• 💎 Others: `{other_count}`
-
-**📍 Sample:** {pairs_preview}
-
-📊 **Signal Settings:**
-• Take Profit: `{self.settings.tp_pips_min}-{self.settings.tp_pips_max} pips` (pair-adjusted)
-• Stop Loss: `{self.settings.sl_pips_min}-{self.settings.sl_pips_max} pips` (pair-adjusted)
-• Min Confidence: `60-65%` (category-based)
-
-👥 **Users:** `{len(self.settings.subscribed_users)}` subscribed
-
-**📱 Available Commands:**
-• `/live [on|off]` - Toggle live monitoring
-• `/set_interval [5-30]` - Change scan frequency
-• `/timeframe [15min|30min|1h]` - Change timeframe
-• `/add_pair [PAIR]` - Add any of 50+ supported pairs
-• `/pairs` - View monitored pairs by category
-
-**Examples:**
-• `/set_interval 5` - Ultra-fast scanning every 5 minutes
-• `/add_pair USDTRY` - Monitor Turkish Lira
-• `/add_pair EURJPY` - Monitor EUR/JPY cross
-• `/timeframe 30min` - Use 30-minute candles
-        """
-
-        await context.bot.send_message(chat_id, message, parse_mode='Markdown')
-
-    async def set_interval_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set scanning interval with batch processing consideration"""
-        if not context.args:
-            await update.message.reply_text(
-                f"**Current scan interval:** `{self.settings.interval_minutes} minutes`\n\n"
-                f"**Batch processing:** {self.scan_batch_size} pairs per batch\n"
-                f"**Total scan time:** ~{(len(self.settings.monitored_pairs) // self.scan_batch_size + 1) * 2} minutes\n\n"
-                "**Usage:** `/set_interval [5-30]`\n"
-                "**Examples:**\n"
-                "• `/set_interval 5` - Ultra-fast scanning\n"
-                "• `/set_interval 15` - Balanced scanning\n"
-                "• `/set_interval 30` - Conservative scanning",
-                parse_mode='Markdown'
-            )
-            return
-
-        try:
-            new_interval = int(context.args[0])
-            if 5 <= new_interval <= 30:
-                old_interval = self.settings.interval_minutes
-                self.settings.interval_minutes = new_interval
-                self._save_settings()
-
-                # Restart live monitoring with new interval
-                if self.settings.live_monitoring:
-                    await self._restart_live_monitoring()
-
-                estimated_scan_time = (len(self.settings.monitored_pairs) // self.scan_batch_size + 1) * 2
-
-                await update.message.reply_text(
-                    f"✅ **Global scan interval updated:** `{old_interval}min` → `{new_interval}min`\n\n"
-                    f"📊 **Impact on {len(self.settings.monitored_pairs)} monitored pairs:**\n"
-                    f"• Scan frequency: Every `{new_interval} minutes`\n"
-                    f"• Estimated scan time: ~`{estimated_scan_time} minutes`\n"
-                    f"• Batch processing: `{self.scan_batch_size} pairs/batch`\n\n"
-                    "🔄 Live monitoring restarted with new interval!",
-                    parse_mode='Markdown'
-                )
-            else:
-                await update.message.reply_text("❌ Interval must be between 5-30 minutes")
-        except ValueError:
-            await update.message.reply_text("❌ Please provide a valid number")
-
-    async def timeframe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set analysis timeframe"""
-        if not context.args:
-            await update.message.reply_text(
-                f"**Current timeframe:** `{self.settings.timeframe}`\n\n"
-                "**Usage:** `/timeframe [15min|30min|1h]`\n"
-                "**Options:**\n"
-                "• `15min` - Fast signals, more frequent\n"
-                "• `30min` - Balanced approach\n"
-                "• `1h` - Stronger signals, less frequent",
-                parse_mode='Markdown'
-            )
-            return
-
-        new_timeframe = context.args[0].lower()
-        valid_timeframes = ["15min", "30min", "1h"]
-
-        if new_timeframe in valid_timeframes:
-            old_timeframe = self.settings.timeframe
-            self.settings.timeframe = new_timeframe
-            self._save_settings()
-            await update.message.reply_text(
-                f"✅ **Global timeframe updated:** `{old_timeframe}` → `{new_timeframe}`\n\n"
-                f"📊 **Impact:** All {len(self.settings.monitored_pairs)} monitored pairs will now use `{new_timeframe}` candles\n"
-                "🔄 Change applies to all future scans across all markets!",
-                parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ Invalid timeframe. Use: {', '.join(valid_timeframes)}"
-            )
-
-    async def config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show configuration"""
-        await self._send_settings(update.message.chat_id, context)
-
-    async def _start_live_monitoring(self):
-        """Start live monitoring system"""
-        if self.live_monitoring_task is None or self.live_monitoring_task.done():
-            self.live_monitoring_task = asyncio.create_task(self._live_monitoring_loop())
-            logger.info(f"🔴 Live monitoring started - bot is now actively scanning {len(self.settings.monitored_pairs)} global markets")
-
-    async def _stop_live_monitoring(self):
-        """Stop live monitoring system"""
-        if self.live_monitoring_task and not self.live_monitoring_task.done():
-            self.live_monitoring_task.cancel()
-            logger.info("🔴 Live monitoring stopped")
-
-    async def _restart_live_monitoring(self):
-        """Restart live monitoring with new settings"""
-        if self.settings.live_monitoring:
-            await self._stop_live_monitoring()
-            await asyncio.sleep(1)  # Small delay
-            await self._start_live_monitoring()
-
-    async def _live_monitoring_loop(self):
-        """Enhanced live monitoring loop - continuously scans all monitored pairs in batches"""
-        logger.info(f"🔄 Live monitoring loop started - scanning {len(self.settings.monitored_pairs)} pairs every {self.settings.interval_minutes} minutes in batches of {self.scan_batch_size}")
-
-        while self.settings.live_monitoring and self.settings.subscribed_users:
-            try:
-                scan_start_time = datetime.now()
-                logger.info(f"🔍 Starting global scan cycle for {len(self.settings.monitored_pairs)} pairs...")
-
-                signals_found = []
-                no_signal_pairs = []
-                processed_pairs = 0
-
-                # Process pairs in batches to avoid overwhelming the API and improve performance
-                pairs_list = list(self.settings.monitored_pairs.copy())
-
-                for i in range(0, len(pairs_list), self.scan_batch_size):
-                    batch = pairs_list[i:i + self.scan_batch_size]
-                    logger.info(f"🔄 Processing batch {(i // self.scan_batch_size) + 1}/{(len(pairs_list) // self.scan_batch_size) + 1}: {', '.join(batch)}")
-
-                    for currency_pair in batch:
-                        try:
-                            # Convert pair format for API
-                            is_valid, api_format, display_format = CurrencyPairValidator.validate_and_format(currency_pair)
-                            if not is_valid:
-                                continue
-
-                            # Fetch and analyze data
-                            candles = await self.data_provider.get_candles(
-                                symbol=api_format,
-                                interval=self.settings.timeframe,
-                                count=100
-                            )
-
-                            if not candles:
-                                continue
-
-                            signal = self.signal_generator.generate_signal(candles, currency_pair)
-
-                            # Check if this is a new signal (avoid duplicate alerts)
-                            signal_key = f"{currency_pair}_{signal.action.value}_{signal.timestamp.strftime('%H')}"
-                            last_signal_key = self.last_signals.get(currency_pair, "")
-
-                            # Track signals for summary
-                            if signal.action != SignalType.NONE:
-                                if signal_key != last_signal_key:
-                                    signals_found.append(signal)
-                                    self.last_signals[currency_pair] = signal_key
-                            else:
-                                no_signal_pairs.append(currency_pair)
-
-                            processed_pairs += 1
-
-                            # Small delay between pairs to avoid rate limiting
-                            await asyncio.sleep(1.5)
-
-                        except Exception as e:
-                            logger.error(f"Error analyzing {currency_pair}: {e}")
-                            continue
-
-                    # Small delay between batches
-                    await asyncio.sleep(3)
-
-                scan_duration = (datetime.now() - scan_start_time).total_seconds()
-                logger.info(f"✅ Global scan completed in {scan_duration:.1f}s - processed {processed_pairs} pairs, found {len(signals_found)} signals")
-
-                # Send signals if found
-                if signals_found:
-                    for signal in signals_found:
-                        self.performance_tracker.log_signal(signal)
-                        message = self._format_signal_message(signal, is_live_alert=True)
-
-                        # Send to all subscribed users
-                        successful_sends = 0
-                        for user_id in self.settings.subscribed_users.copy():
-                            try:
-                                await self.application.bot.send_message(
-                                    user_id, message, parse_mode='Markdown'
-                                )
-                                successful_sends += 1
-                            except Exception as e:
-                                logger.error(f"Failed to send alert to user {user_id}: {e}")
-                                # Remove user if chat not found
-                                if "chat not found" in str(e).lower():
-                                    self.settings.subscribed_users.discard(user_id)
-
-                        if successful_sends > 0:
-                            pair_category = CurrencyPairValidator.get_pair_category(signal.currency_pair)
-                            logger.info(f"🚨 LIVE ALERT sent: {signal.action.value} {signal.currency_pair} ({pair_category}) to {successful_sends} users")
-
-                # Send "No Signals" summary if no signals found (less frequent to avoid spam)
-                elif len(no_signal_pairs) > 0 and scan_start_time.minute % 30 == 0:  # Only every 30 minutes
-                    no_signal_message = self._format_no_signal_summary(no_signal_pairs, scan_start_time)
-
-                    # Send to all subscribed users
-                    for user_id in self.settings.subscribed_users.copy():
-                        try:
-                            await self.application.bot.send_message(
-                                user_id, no_signal_message, parse_mode='Markdown'
-                            )
-                        except Exception as e:
-                            logger.error(f"Failed to send no-signal update to user {user_id}: {e}")
-                            if "chat not found" in str(e).lower():
-                                self.settings.subscribed_users.discard(user_id)
-
-                    logger.info(f"📊 No signals found - sent summary to {len(self.settings.subscribed_users)} users")
-
-                # Save settings after each cycle
-                self._save_settings()
-
-                logger.info(f"⏰ Next global scan in {self.settings.interval_minutes} minutes")
-
-                # Wait for next scan
-                await asyncio.sleep(self.settings.interval_minutes * 60)
-
-            except asyncio.CancelledError:
-                logger.info("🔴 Live monitoring loop cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in live monitoring loop: {e}")
-                await asyncio.sleep(60)  # Wait 1 minute before retry
-
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enhanced help command"""
-        await update.message.reply_text(help_message, parse_mode='Markdown')
-
-    def run(self):
-        """Start the live bot"""
-        # Create application
-        self.application = Application.builder().token(self.telegram_token).build()
-
-        # Add handlers
-        self.application.add_handler(CommandHandler("start", self.start_command))
-        self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CommandHandler("analyze", self.analyze_command))
-        self.application.add_handler(CommandHandler("performance", self.performance_command))
-        self.application.add_handler(CommandHandler("live", self.live_command))
-        self.application.add_handler(CommandHandler("add_pair", self.add_pair_command))
-        self.application.add_handler(CommandHandler("remove_pair", self.remove_pair_command))
-        self.application.add_handler(CommandHandler("pairs", self.pairs_command))
-        self.application.add_handler(CommandHandler("set_interval", self.set_interval_command))
-        self.application.add_handler(CommandHandler("timeframe", self.timeframe_command))
-        self.application.add_handler(CommandHandler("config", self.config_command))
-        self.application.add_handler(CallbackQueryHandler(self.button_callback))
-
-        # Start live monitoring automatically if enabled and users subscribed
-        async def post_init(application):
-            if self.settings.live_monitoring and self.settings.subscribed_users:
-                await self._start_live_monitoring()
-
-        self.application.post_init = post_init
-
-        # Start the bot
-        logger.info("🚀 Starting Enhanced Live Forex Telegram Bot v3.0...")
-        logger.info(f"📊 Monitoring {len(self.settings.monitored_pairs)} pairs every {self.settings.interval_minutes} minutes")
-        logger.info(f"💱 Supporting {len(CurrencyPairValidator.VALID_PAIRS)} total currency pairs")
-        logger.info(f"👥 {len(self.settings.subscribed_users)} users subscribed")
-        logger.info(f"🔄 Batch processing: {self.scan_batch_size} pairs per batch")
-
-        # Log category breakdown
-        categories = CurrencyPairValidator.get_pairs_by_category()
-        for category, pairs in categories.items():
-            monitored_in_category = len([p for p in self.settings.monitored_pairs if p in pairs])
-            if monitored_in_category > 0:
-                logger.info(f"📊 {category}: {monitored_in_category}/{len(pairs)} pairs monitored")
-
-        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-def main():
-    """Main function to run the enhanced live bot"""
-    # Configuration - Replace with your actual tokens
-    TELEGRAM_BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"
-    TWELVEDATA_API_KEY = "b971d5ae2d0447fbb2fa621565a16334"  # Optional
-
-    # Validate token
-    if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
-        logger.error("Please set your Telegram bot token in the TELEGRAM_BOT_TOKEN variable")
-        print("\n🔑 SETUP REQUIRED:")
-        print("1. Get bot token from @BotFather on Telegram")
-        print("2. Replace 'YOUR_TELEGRAM_BOT_TOKEN_HERE' with your actual token")
-        print("3. Optionally get TwelveData API key for real market data")
-        print("4. Run: pip install python-telegram-bot requests numpy")
-        return
-
-    try:
-        # Create and run enhanced live bot
-        bot = LiveForexTelegramBot(
-            telegram_token=TELEGRAM_BOT_TOKEN,
-            api_key=TWELVEDATA_API_KEY if TWELVEDATA_API_KEY != "YOUR_TWELVEDATA_API_KEY_HERE" else None
-        )
-
-        print("\n🚀 ENHANCED LIVE FOREX BOT v3.0")
-        print("===============================")
-        print(f"📊 Supporting {len(CurrencyPairValidator.VALID_PAIRS)} currency pairs")
-        print("💱 Majors, Crosses, Minors & Exotics")
-        print("🔄 24/7 Live monitoring with batch processing")
-        print("⚡ Instant global market alerts")
-        print("🌍 Global market coverage")
-        print("\nStarting bot...")
-
-        bot.run()
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.error(f"Bot crashed: {e}")
-
-if __name__ == "__main__":
-    main()import asyncio
+import asyncio
 import logging
 import requests
 import numpy as np
@@ -1676,3 +1047,772 @@ The bot is continuously scanning these global markets and will send alerts immed
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def add_pair_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Add a currency pair to monitoring with enhanced validation"""
+        if not context.args:
+            categories = CurrencyPairValidator.get_pairs_by_category()
+            sample_pairs = []
+            for category, pairs in categories.items():
+                sample_pairs.extend(pairs[:2])  # Get 2 examples from each category
+
+            await update.message.reply_text(
+                f"**💱 Add Currency Pair to Monitoring**\n\n"
+                f"**Usage:** `/add_pair [PAIR]`\n\n"
+                f"**Examples:**\n"
+                f"• `/add_pair USDTRY` - Turkish Lira\n"
+                f"• `/add_pair GBPJPY` - British Pound / Japanese Yen\n"
+                f"• `/add_pair EURAUD` - Euro / Australian Dollar\n"
+                f"• `/add_pair USDSEK` - US Dollar / Swedish Krona\n\n"
+                f"**Sample Supported Pairs:**\n"
+                f"{' • '.join(sample_pairs[:12])}\n\n"
+                f"**📊 Currently monitoring:** {len(self.settings.monitored_pairs)} pairs\n"
+                f"**💡 Tip:** Use the 'All Pairs' button to see all 50+ supported pairs!",
+                parse_mode='Markdown'
+            )
+            return
+
+        pair_input = context.args[0]
+        is_valid, api_format, display_format = CurrencyPairValidator.validate_and_format(pair_input)
+
+        if not is_valid:
+            await update.message.reply_text(
+                f"❌ **Invalid currency pair:** `{pair_input}`\n\n"
+                f"**Supported formats:**\n"
+                f"• `EURUSD` or `EUR/USD`\n"
+                f"• `GBPJPY` or `GBP/JPY`\n"
+                f"• `USDTRY` or `USD/TRY`\n\n"
+                f"**💡 Use `/pairs` to see monitored pairs or the 'All Pairs' button for full list!**",
+                parse_mode='Markdown'
+            )
+            return
+
+        if display_format in self.settings.monitored_pairs:
+            pair_category = CurrencyPairValidator.get_pair_category(display_format)
+            await update.message.reply_text(
+                f"⚠️ **{display_format} ({pair_category}) is already being monitored.**\n\n"
+                f"**📊 Total monitored pairs:** {len(self.settings.monitored_pairs)}\n"
+                f"Use `/pairs` to see all monitored pairs.",
+                parse_mode='Markdown'
+            )
+            return
+
+        # Add pair to monitoring
+        self.settings.monitored_pairs.add(display_format)
+        self._save_settings()
+
+        # Restart live monitoring if active to include new pair
+        if self.settings.live_monitoring:
+            await self._restart_live_monitoring()
+
+        pair_category = CurrencyPairValidator.get_pair_category(display_format)
+        await update.message.reply_text(
+            f"✅ **{display_format} ({pair_category}) added to monitoring!**\n\n"
+            f"**📊 Now monitoring:** {len(self.settings.monitored_pairs)} currency pairs\n"
+            f"**⚡ Scan interval:** {self.settings.interval_minutes} minutes\n"
+            f"**🔄 Status:** {'🟢 ACTIVE' if self.settings.live_monitoring else '🔴 INACTIVE'}\n\n"
+            f"**💡 The bot will now include {display_format} in its continuous market scanning and send alerts when signal conditions are met!**\n\n"
+            f"Use `/analyze {display_format}` for immediate analysis.",
+            parse_mode='Markdown'
+        )
+
+    async def remove_pair_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Remove a currency pair from monitoring"""
+        if not context.args:
+            if not self.settings.monitored_pairs:
+                await update.message.reply_text(
+                    "📭 **No pairs are currently being monitored.**\n\n"
+                    "Use `/add_pair [PAIR]` to start monitoring pairs.",
+                    parse_mode='Markdown'
+                )
+                return
+
+            # Show first few monitored pairs as examples
+            sample_pairs = list(self.settings.monitored_pairs)[:8]
+            pairs_text = " • ".join(sample_pairs)
+            if len(self.settings.monitored_pairs) > 8:
+                pairs_text += f" +{len(self.settings.monitored_pairs) - 8} more"
+
+            await update.message.reply_text(
+                f"**🗑️ Remove Currency Pair from Monitoring**\n\n"
+                f"**Usage:** `/remove_pair [PAIR]`\n\n"
+                f"**Examples:**\n"
+                f"• `/remove_pair EURUSD`\n"
+                f"• `/remove_pair GBPJPY`\n\n"
+                f"**📊 Currently monitored ({len(self.settings.monitored_pairs)}):**\n"
+                f"{pairs_text}\n\n"
+                f"Use `/pairs` to see all monitored pairs by category.",
+                parse_mode='Markdown'
+            )
+            return
+
+        pair_input = context.args[0]
+        is_valid, api_format, display_format = CurrencyPairValidator.validate_and_format(pair_input)
+
+        if not is_valid:
+            await update.message.reply_text(
+                f"❌ **Invalid currency pair:** `{pair_input}`\n\n"
+                f"Please provide a valid currency pair format like `EURUSD` or `EUR/USD`.",
+                parse_mode='Markdown'
+            )
+            return
+
+        if display_format not in self.settings.monitored_pairs:
+            await update.message.reply_text(
+                f"⚠️ **{display_format} is not currently being monitored.**\n\n"
+                f"**📊 Total monitored pairs:** {len(self.settings.monitored_pairs)}\n"
+                f"Use `/pairs` to see all monitored pairs.",
+                parse_mode='Markdown'
+            )
+            return
+
+        # Remove pair from monitoring
+        self.settings.monitored_pairs.remove(display_format)
+        self._save_settings()
+
+        # Restart live monitoring if active
+        if self.settings.live_monitoring:
+            await self._restart_live_monitoring()
+
+        pair_category = CurrencyPairValidator.get_pair_category(display_format)
+        await update.message.reply_text(
+            f"✅ **{display_format} ({pair_category}) removed from monitoring.**\n\n"
+            f"**📊 Now monitoring:** {len(self.settings.monitored_pairs)} currency pairs\n"
+            f"**🔄 Status:** {'🟢 ACTIVE' if self.settings.live_monitoring else '🔴 INACTIVE'}\n\n"
+            f"The bot will no longer scan {display_format} for signals.\n\n"
+            f"Use `/add_pair {display_format}` to add it back anytime.",
+            parse_mode='Markdown'
+        )
+
+    async def live_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Toggle live monitoring on/off"""
+        user_id = update.effective_user.id
+
+        if not context.args:
+            status = "ON" if self.settings.live_monitoring else "OFF"
+            await update.message.reply_text(
+                f"**🔄 Live Multi-Market Monitoring:** `{status}`\n\n"
+                f"**Currently monitoring:** {len(self.settings.monitored_pairs)} pairs\n"
+                f"**Scan interval:** {self.settings.interval_minutes} minutes\n\n"
+                "**Usage:** `/live [on|off]`",
+                parse_mode='Markdown'
+            )
+            return
+
+        setting = context.args[0].lower()
+
+        if setting == "on":
+            self.settings.live_monitoring = True
+            self.settings.subscribed_users.add(user_id)
+            self._save_settings()
+            await self._start_live_monitoring()
+
+            # Get category breakdown for the message
+            categories = CurrencyPairValidator.get_pairs_by_category()
+            major_count = len([p for p in self.settings.monitored_pairs if p in categories["Majors"]])
+            cross_count = len([p for p in self.settings.monitored_pairs if p in categories["Popular Crosses"]])
+            minor_count = len([p for p in self.settings.monitored_pairs if p in categories["Minors"]])
+
+            await update.message.reply_text(
+                f"🟢 **Live Multi-Market Monitoring ACTIVATED!**\n\n"
+                f"📊 **Monitoring {len(self.settings.monitored_pairs)} pairs:**\n"
+                f"• 🏛️ Majors: {major_count}\n"
+                f"• 🔄 Crosses: {cross_count}\n" 
+                f"• 🌍 Minors/Others: {minor_count + (len(self.settings.monitored_pairs) - major_count - cross_count)}\n\n"
+                f"⚡ **Scan frequency:** Every {self.settings.interval_minutes} minutes\n"
+                f"🔔 You'll receive instant alerts from all monitored markets!\n\n"
+                f"**Global coverage active across USD, EUR, GBP, JPY, AUD, CAD, NZD, CHF + exotics!**",
+                parse_mode='Markdown'
+            )
+        elif setting == "off":
+            if user_id in self.settings.subscribed_users:
+                self.settings.subscribed_users.remove(user_id)
+
+            # If no users subscribed, stop monitoring
+            if not self.settings.subscribed_users:
+                self.settings.live_monitoring = False
+                await self._stop_live_monitoring()
+
+            self._save_settings()
+            await update.message.reply_text(
+                "🔴 **Live monitoring DISABLED for you.**\n\n"
+                "Use `/live on` to reactivate instant multi-market alerts.",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text("❌ Use 'on' or 'off' with the live command")
+
+    async def analyze_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Enhanced analyze command with currency pair support and category detection"""
+        # Extract currency pair from command arguments
+        currency_pair = "EURUSD"  # Default
+        if context.args and len(context.args) > 0:
+            user_input = context.args[0]
+            is_valid, api_format, display_format = CurrencyPairValidator.validate_and_format(user_input)
+
+            if not is_valid:
+                await update.message.reply_text(
+                    f"❌ Invalid currency pair: `{user_input}`\n\n"
+                    "**Supported pairs examples:**\n"
+                    "• Majors: EURUSD, GBPUSD, USDJPY\n"
+                    "• Crosses: EURJPY, GBPJPY, AUDJPY\n"
+                    "• Minors: USDSGD, USDSEK, USDNOK\n"
+                    "• Exotics: USDTRY, USDZAR, USDMXN\n\n"
+                    "**Usage:** `/analyze GBPUSD` or just `/analyze` for EURUSD",
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💱 All Supported Pairs", callback_data="all_pairs")]])
+                )
+                return
+
+            currency_pair = display_format
+            api_pair = api_format
+        else:
+            api_pair = "EUR/USD"
+
+        await self._send_analysis(update.message.chat_id, context, currency_pair, api_pair)
+
+    async def _send_analysis(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, 
+                           currency_pair: str = "EURUSD", api_pair: str = "EUR/USD"):
+        """Send market analysis for specified currency pair with category info"""
+        pair_category = CurrencyPairValidator.get_pair_category(currency_pair)
+        await context.bot.send_message(chat_id, f"🔍 Analyzing {currency_pair} ({pair_category})...")
+
+        try:
+            candles = await self.data_provider.get_candles(
+                symbol=api_pair,
+                interval=self.settings.timeframe,
+                count=100
+            )
+
+            if not candles:
+                await context.bot.send_message(chat_id, f"❌ Could not fetch data for {currency_pair}.")
+                return
+
+            signal = self.signal_generator.generate_signal(candles, currency_pair)
+
+            # Log signal if it's not NONE
+            if signal.action != SignalType.NONE:
+                self.performance_tracker.log_signal(signal)
+
+            message = self._format_signal_message(signal, is_live_alert=False)
+            await context.bot.send_message(chat_id, message, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error in analysis: {e}")
+            await context.bot.send_message(chat_id, f"❌ Analysis failed for {currency_pair}. Please try again.")
+
+    def _format_no_signal_summary(self, no_signal_pairs: List[str], scan_time: datetime) -> str:
+        """Format a summary message when no signals are found with category breakdown"""
+        # Organize pairs by category for the summary
+        categories = CurrencyPairValidator.get_pairs_by_category()
+        category_counts = {}
+
+        for pair in no_signal_pairs:
+            category = CurrencyPairValidator.get_pair_category(pair)
+            category_counts[category] = category_counts.get(category, 0) + 1
+
+        category_text = " | ".join([f"{cat}: {count}" for cat, count in category_counts.items()])
+
+        pairs_preview = ", ".join(no_signal_pairs[:8])  # Show first 8 pairs
+        if len(no_signal_pairs) > 8:
+            pairs_preview += f" +{len(no_signal_pairs) - 8} more"
+
+        message = f"""
+📊 **Global Market Scan Complete - No Signals**
+
+⚪ **Status:** No trading conditions met across monitored markets
+🔍 **Pairs Scanned:** {len(no_signal_pairs)} ({category_text})
+⏰ **Scan Time:** {scan_time.strftime('%H:%M UTC')}
+📈 **Timeframe:** {self.settings.timeframe}
+
+**🌍 Markets Analyzed:** {pairs_preview}
+
+💡 **Market Status:** All monitored pairs are in consolidation or weak signal conditions
+🔄 **Next Global Scan:** {self.settings.interval_minutes} minutes
+
+The bot is actively monitoring global markets - you'll get instant alerts when strong signals appear across any currency pair! 📡
+        """
+        return message
+
+    def _format_signal_message(self, signal: TradingSignal, is_live_alert: bool = True) -> str:
+        """Format signal into readable message with pair category info"""
+        currency_pair = signal.currency_pair
+        pair_category = CurrencyPairValidator.get_pair_category(currency_pair)
+
+        # Determine decimal places for display
+        decimals = 3 if 'JPY' in currency_pair else 5
+
+        alert_header = "🚨 **LIVE GLOBAL ALERT** 🚨\n\n" if is_live_alert else ""
+
+        if signal.action == SignalType.BUY:
+            emoji = "🟢"
+            message = f"""{alert_header}📈 **Pair:** {currency_pair} ({pair_category})
+{emoji} **BUY SIGNAL DETECTED**
+
+💰 **Trade Setup:**
+• Entry: `{signal.current_price:.{decimals}f}`
+• 🎯 Take Profit: `{signal.take_profit:.{decimals}f}` (+{signal.tp_pips} pips)
+• 🛑 Stop Loss: `{signal.stop_loss:.{decimals}f}` (-{signal.sl_pips} pips)
+
+📊 **Technical Analysis:**
+• RSI: `{signal.rsi:.1f}`
+• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
+• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
+• Pattern: `{signal.pattern}`
+• Support: `{signal.support_resistance:.{decimals}f}`
+• Confidence: `{signal.confidence:.0f}%`
+
+📈 **Reason:** {signal.reason}
+
+⏰ Timeframe: `{self.settings.timeframe}`
+🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
+🏷️ Category: `{pair_category}`"""
+
+        elif signal.action == SignalType.SELL:
+            emoji = "🔴"
+            message = f"""{alert_header}📈 **Pair:** {currency_pair} ({pair_category})
+{emoji} **SELL SIGNAL DETECTED**
+
+💰 **Trade Setup:**
+• Entry: `{signal.current_price:.{decimals}f}`
+• 🎯 Take Profit: `{signal.take_profit:.{decimals}f}` (+{signal.tp_pips} pips)
+• 🛑 Stop Loss: `{signal.stop_loss:.{decimals}f}` (-{signal.sl_pips} pips)
+
+📊 **Technical Analysis:**
+• RSI: `{signal.rsi:.1f}`
+• EMA 20: `{signal.ema_20:.{decimals}f}` | EMA 50: `{signal.ema_50:.{decimals}f}`
+• MACD: `{signal.macd:.6f}` | Signal: `{signal.macd_signal:.6f}`
+• Pattern: `{signal.pattern}`
+• Resistance: `{signal.support_resistance:.{decimals}f}`
+• Confidence: `{signal.confidence:.0f}%`
+
+📉 **Reason:** {signal.reason}
+
+⏰ Timeframe: `{self.settings.timeframe}`
+🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
+🏷️ Category: `{pair_category}`"""
+
+        else:
+            emoji = "⚪"
+            no_alert_header = "📊 **Manual Analysis**\n\n" if not is_live_alert else ""
+            message = f"""{no_alert_header}📈 **Pair:** {currency_pair} ({pair_category})
+{emoji} **NO SIGNAL**
+
+📊 **Current Analysis:**
+• RSI: `{signal.rsi:.1f}`
+• Current Price: `{signal.current_price:.{decimals}f}`
+• Pattern: `{signal.pattern}`
+
+💡 **Status:** {signal.reason}
+
+⏰ Timeframe: `{self.settings.timeframe}`
+🕐 Time: `{signal.timestamp.strftime('%H:%M UTC')}`
+🏷️ Category: `{pair_category}`
+
+💡 Conditions not strong enough for a signal."""
+
+        return message
+
+    async def performance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show performance statistics"""
+        await self._send_performance(update.message.chat_id, context)
+
+    async def _send_performance(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+        """Send enhanced performance statistics with category breakdown"""
+        stats = self.performance_tracker.get_stats()
+
+        # Format category breakdown
+        category_text = ""
+        if stats['category_breakdown']:
+            for category, count in stats['category_breakdown'].items():
+                category_text += f"• {category}: `{count}` signals\n"
+        else:
+            category_text = "• No signals recorded yet\n"
+
+        message = f"""
+📈 **Live Global Performance Statistics**
+
+📊 **Signal Summary:**
+• Total Signals: `{stats['total_signals']}`
+• Buy Signals: `{stats['buy_signals']}`
+• Sell Signals: `{stats['sell_signals']}`
+• Avg Confidence: `{stats['avg_confidence']}%`
+• Unique Pairs: `{stats['pairs_analyzed']}`
+
+**📊 Signals by Category:**
+{category_text}
+
+🕐 **Last Signal:** {stats['last_signal']}
+
+🔄 **Live Multi-Market Monitoring:**
+• Status: `{'🟢 ACTIVE' if self.settings.live_monitoring else '🔴 INACTIVE'}`
+• Monitored Pairs: `{len(self.settings.monitored_pairs)}`
+• Scan Interval: `{self.settings.interval_minutes} minutes`
+• Batch Size: `{self.scan_batch_size} pairs/batch`
+• Timeframe: `{self.settings.timeframe}`
+• Subscribed Users: `{len(self.settings.subscribed_users)}`
+
+💡 All signals are generated automatically across global markets and sent instantly when conditions are met!
+        """
+
+        await context.bot.send_message(chat_id, message, parse_mode='Markdown')
+
+    async def _send_settings(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+        """Send current settings with enhanced pair info"""
+        # Get category breakdown
+        categories = CurrencyPairValidator.get_pairs_by_category()
+        major_count = len([p for p in self.settings.monitored_pairs if p in categories["Majors"]])
+        cross_count = len([p for p in self.settings.monitored_pairs if p in categories["Popular Crosses"]])
+        minor_count = len([p for p in self.settings.monitored_pairs if p in categories["Minors"]])
+        other_count = len([p for p in self.settings.monitored_pairs if p in categories["Others"]])
+
+        pairs_preview = ", ".join(list(self.settings.monitored_pairs)[:4])
+        if len(self.settings.monitored_pairs) > 4:
+            pairs_preview += f" +{len(self.settings.monitored_pairs) - 4} more"
+
+        message = f"""
+⚙️ **Live Global Bot Configuration**
+
+🔄 **Live Multi-Market Monitoring:**
+• Status: `{'🟢 ACTIVE' if self.settings.live_monitoring else '🔴 INACTIVE'}`
+• Global Scan Interval: `{self.settings.interval_minutes} minutes`
+• Timeframe: `{self.settings.timeframe}`
+• Batch Processing: `{self.scan_batch_size} pairs/batch`
+
+**📊 Monitored Markets ({len(self.settings.monitored_pairs)} pairs):**
+• 🏛️ Majors: `{major_count}`
+• 🔄 Crosses: `{cross_count}`
+• 🌍 Minors: `{minor_count}`
+• 💎 Others: `{other_count}`
+
+**📍 Sample:** {pairs_preview}
+
+📊 **Signal Settings:**
+• Take Profit: `{self.settings.tp_pips_min}-{self.settings.tp_pips_max} pips` (pair-adjusted)
+• Stop Loss: `{self.settings.sl_pips_min}-{self.settings.sl_pips_max} pips` (pair-adjusted)
+• Min Confidence: `60-65%` (category-based)
+
+👥 **Users:** `{len(self.settings.subscribed_users)}` subscribed
+
+**📱 Available Commands:**
+• `/live [on|off]` - Toggle live monitoring
+• `/set_interval [5-30]` - Change scan frequency
+• `/timeframe [15min|30min|1h]` - Change timeframe
+• `/add_pair [PAIR]` - Add any of 50+ supported pairs
+• `/pairs` - View monitored pairs by category
+
+**Examples:**
+• `/set_interval 5` - Ultra-fast scanning every 5 minutes
+• `/add_pair USDTRY` - Monitor Turkish Lira
+• `/add_pair EURJPY` - Monitor EUR/JPY cross
+• `/timeframe 30min` - Use 30-minute candles
+        """
+
+        await context.bot.send_message(chat_id, message, parse_mode='Markdown')
+
+    async def set_interval_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Set scanning interval with batch processing consideration"""
+        if not context.args:
+            await update.message.reply_text(
+                f"**Current scan interval:** `{self.settings.interval_minutes} minutes`\n\n"
+                f"**Batch processing:** {self.scan_batch_size} pairs per batch\n"
+                f"**Total scan time:** ~{(len(self.settings.monitored_pairs) // self.scan_batch_size + 1) * 2} minutes\n\n"
+                "**Usage:** `/set_interval [5-30]`\n"
+                "**Examples:**\n"
+                "• `/set_interval 5` - Ultra-fast scanning\n"
+                "• `/set_interval 15` - Balanced scanning\n"
+                "• `/set_interval 30` - Conservative scanning",
+                parse_mode='Markdown'
+            )
+            return
+
+        try:
+            new_interval = int(context.args[0])
+            if 5 <= new_interval <= 30:
+                old_interval = self.settings.interval_minutes
+                self.settings.interval_minutes = new_interval
+                self._save_settings()
+
+                # Restart live monitoring with new interval
+                if self.settings.live_monitoring:
+                    await self._restart_live_monitoring()
+
+                estimated_scan_time = (len(self.settings.monitored_pairs) // self.scan_batch_size + 1) * 2
+
+                await update.message.reply_text(
+                    f"✅ **Global scan interval updated:** `{old_interval}min` → `{new_interval}min`\n\n"
+                    f"📊 **Impact on {len(self.settings.monitored_pairs)} monitored pairs:**\n"
+                    f"• Scan frequency: Every `{new_interval} minutes`\n"
+                    f"• Estimated scan time: ~`{estimated_scan_time} minutes`\n"
+                    f"• Batch processing: `{self.scan_batch_size} pairs/batch`\n\n"
+                    "🔄 Live monitoring restarted with new interval!",
+                    parse_mode='Markdown'
+                )
+            else:
+                await update.message.reply_text("❌ Interval must be between 5-30 minutes")
+        except ValueError:
+            await update.message.reply_text("❌ Please provide a valid number")
+
+    async def timeframe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Set analysis timeframe"""
+        if not context.args:
+            await update.message.reply_text(
+                f"**Current timeframe:** `{self.settings.timeframe}`\n\n"
+                "**Usage:** `/timeframe [15min|30min|1h]`\n"
+                "**Options:**\n"
+                "• `15min` - Fast signals, more frequent\n"
+                "• `30min` - Balanced approach\n"
+                "• `1h` - Stronger signals, less frequent",
+                parse_mode='Markdown'
+            )
+            return
+
+        new_timeframe = context.args[0].lower()
+        valid_timeframes = ["15min", "30min", "1h"]
+
+        if new_timeframe in valid_timeframes:
+            old_timeframe = self.settings.timeframe
+            self.settings.timeframe = new_timeframe
+            self._save_settings()
+            await update.message.reply_text(
+                f"✅ **Global timeframe updated:** `{old_timeframe}` → `{new_timeframe}`\n\n"
+                f"📊 **Impact:** All {len(self.settings.monitored_pairs)} monitored pairs will now use `{new_timeframe}` candles\n"
+                "🔄 Change applies to all future scans across all markets!",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Invalid timeframe. Use: {', '.join(valid_timeframes)}"
+            )
+
+    async def config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show configuration"""
+        await self._send_settings(update.message.chat_id, context)
+
+    async def _start_live_monitoring(self):
+        """Start live monitoring system"""
+        if self.live_monitoring_task is None or self.live_monitoring_task.done():
+            self.live_monitoring_task = asyncio.create_task(self._live_monitoring_loop())
+            logger.info(f"🔴 Live monitoring started - bot is now actively scanning {len(self.settings.monitored_pairs)} global markets")
+
+    async def _stop_live_monitoring(self):
+        """Stop live monitoring system"""
+        if self.live_monitoring_task and not self.live_monitoring_task.done():
+            self.live_monitoring_task.cancel()
+            logger.info("🔴 Live monitoring stopped")
+
+    async def _restart_live_monitoring(self):
+        """Restart live monitoring with new settings"""
+        if self.settings.live_monitoring:
+            await self._stop_live_monitoring()
+            await asyncio.sleep(1)  # Small delay
+            await self._start_live_monitoring()
+
+    async def _live_monitoring_loop(self):
+        """Enhanced live monitoring loop - continuously scans all monitored pairs in batches"""
+        logger.info(f"🔄 Live monitoring loop started - scanning {len(self.settings.monitored_pairs)} pairs every {self.settings.interval_minutes} minutes in batches of {self.scan_batch_size}")
+
+        while self.settings.live_monitoring and self.settings.subscribed_users:
+            try:
+                scan_start_time = datetime.now()
+                logger.info(f"🔍 Starting global scan cycle for {len(self.settings.monitored_pairs)} pairs...")
+
+                signals_found = []
+                no_signal_pairs = []
+                processed_pairs = 0
+
+                # Process pairs in batches to avoid overwhelming the API and improve performance
+                pairs_list = list(self.settings.monitored_pairs.copy())
+
+                for i in range(0, len(pairs_list), self.scan_batch_size):
+                    batch = pairs_list[i:i + self.scan_batch_size]
+                    logger.info(f"🔄 Processing batch {(i // self.scan_batch_size) + 1}/{(len(pairs_list) // self.scan_batch_size) + 1}: {', '.join(batch)}")
+
+                    for currency_pair in batch:
+                        try:
+                            # Convert pair format for API
+                            is_valid, api_format, display_format = CurrencyPairValidator.validate_and_format(currency_pair)
+                            if not is_valid:
+                                continue
+
+                            # Fetch and analyze data
+                            candles = await self.data_provider.get_candles(
+                                symbol=api_format,
+                                interval=self.settings.timeframe,
+                                count=100
+                            )
+
+                            if not candles:
+                                continue
+
+                            signal = self.signal_generator.generate_signal(candles, currency_pair)
+
+                            # Check if this is a new signal (avoid duplicate alerts)
+                            signal_key = f"{currency_pair}_{signal.action.value}_{signal.timestamp.strftime('%H')}"
+                            last_signal_key = self.last_signals.get(currency_pair, "")
+
+                            # Track signals for summary
+                            if signal.action != SignalType.NONE:
+                                if signal_key != last_signal_key:
+                                    signals_found.append(signal)
+                                    self.last_signals[currency_pair] = signal_key
+                            else:
+                                no_signal_pairs.append(currency_pair)
+
+                            processed_pairs += 1
+
+                            # Small delay between pairs to avoid rate limiting
+                            await asyncio.sleep(1.5)
+
+                        except Exception as e:
+                            logger.error(f"Error analyzing {currency_pair}: {e}")
+                            continue
+
+                    # Small delay between batches
+                    await asyncio.sleep(3)
+
+                scan_duration = (datetime.now() - scan_start_time).total_seconds()
+                logger.info(f"✅ Global scan completed in {scan_duration:.1f}s - processed {processed_pairs} pairs, found {len(signals_found)} signals")
+
+                # Send signals if found
+                if signals_found:
+                    for signal in signals_found:
+                        self.performance_tracker.log_signal(signal)
+                        message = self._format_signal_message(signal, is_live_alert=True)
+
+                        # Send to all subscribed users
+                        successful_sends = 0
+                        for user_id in self.settings.subscribed_users.copy():
+                            try:
+                                await self.application.bot.send_message(
+                                    user_id, message, parse_mode='Markdown'
+                                )
+                                successful_sends += 1
+                            except Exception as e:
+                                logger.error(f"Failed to send alert to user {user_id}: {e}")
+                                # Remove user if chat not found
+                                if "chat not found" in str(e).lower():
+                                    self.settings.subscribed_users.discard(user_id)
+
+                        if successful_sends > 0:
+                            pair_category = CurrencyPairValidator.get_pair_category(signal.currency_pair)
+                            logger.info(f"🚨 LIVE ALERT sent: {signal.action.value} {signal.currency_pair} ({pair_category}) to {successful_sends} users")
+
+                # Send "No Signals" summary if no signals found (less frequent to avoid spam)
+                elif len(no_signal_pairs) > 0 and scan_start_time.minute % 30 == 0:  # Only every 30 minutes
+                    no_signal_message = self._format_no_signal_summary(no_signal_pairs, scan_start_time)
+
+                    # Send to all subscribed users
+                    for user_id in self.settings.subscribed_users.copy():
+                        try:
+                            await self.application.bot.send_message(
+                                user_id, no_signal_message, parse_mode='Markdown'
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to send no-signal update to user {user_id}: {e}")
+                            if "chat not found" in str(e).lower():
+                                self.settings.subscribed_users.discard(user_id)
+
+                    logger.info(f"📊 No signals found - sent summary to {len(self.settings.subscribed_users)} users")
+
+                # Save settings after each cycle
+                self._save_settings()
+
+                logger.info(f"⏰ Next global scan in {self.settings.interval_minutes} minutes")
+
+                # Wait for next scan
+                await asyncio.sleep(self.settings.interval_minutes * 60)
+
+            except asyncio.CancelledError:
+                logger.info("🔴 Live monitoring loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in live monitoring loop: {e}")
+                await asyncio.sleep(60)  # Wait 1 minute before retry
+
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Enhanced help command"""
+        await update.message.reply_text(help_message, parse_mode='Markdown')
+
+    def run(self):
+        """Start the live bot"""
+        # Create application
+        self.application = Application.builder().token(self.telegram_token).build()
+
+        # Add handlers
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("analyze", self.analyze_command))
+        self.application.add_handler(CommandHandler("performance", self.performance_command))
+        self.application.add_handler(CommandHandler("live", self.live_command))
+        self.application.add_handler(CommandHandler("add_pair", self.add_pair_command))
+        self.application.add_handler(CommandHandler("remove_pair", self.remove_pair_command))
+        self.application.add_handler(CommandHandler("pairs", self.pairs_command))
+        self.application.add_handler(CommandHandler("set_interval", self.set_interval_command))
+        self.application.add_handler(CommandHandler("timeframe", self.timeframe_command))
+        self.application.add_handler(CommandHandler("config", self.config_command))
+        self.application.add_handler(CallbackQueryHandler(self.button_callback))
+
+        # Start live monitoring automatically if enabled and users subscribed
+        async def post_init(application):
+            if self.settings.live_monitoring and self.settings.subscribed_users:
+                await self._start_live_monitoring()
+
+        self.application.post_init = post_init
+
+        # Start the bot
+        logger.info("🚀 Starting Enhanced Live Forex Telegram Bot v3.0...")
+        logger.info(f"📊 Monitoring {len(self.settings.monitored_pairs)} pairs every {self.settings.interval_minutes} minutes")
+        logger.info(f"💱 Supporting {len(CurrencyPairValidator.VALID_PAIRS)} total currency pairs")
+        logger.info(f"👥 {len(self.settings.subscribed_users)} users subscribed")
+        logger.info(f"🔄 Batch processing: {self.scan_batch_size} pairs per batch")
+
+        # Log category breakdown
+        categories = CurrencyPairValidator.get_pairs_by_category()
+        for category, pairs in categories.items():
+            monitored_in_category = len([p for p in self.settings.monitored_pairs if p in pairs])
+            if monitored_in_category > 0:
+                logger.info(f"📊 {category}: {monitored_in_category}/{len(pairs)} pairs monitored")
+
+        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+def main():
+    """Main function to run the enhanced live bot"""
+    # Configuration - Replace with your actual tokens
+    TELEGRAM_BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"
+    TWELVEDATA_API_KEY = "b971d5ae2d0447fbb2fa621565a16334"  # Optional
+
+    # Validate token
+    if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
+        logger.error("Please set your Telegram bot token in the TELEGRAM_BOT_TOKEN variable")
+        print("\n🔑 SETUP REQUIRED:")
+        print("1. Get bot token from @BotFather on Telegram")
+        print("2. Replace 'YOUR_TELEGRAM_BOT_TOKEN_HERE' with your actual token")
+        print("3. Optionally get TwelveData API key for real market data")
+        print("4. Run: pip install python-telegram-bot requests numpy")
+        return
+
+    try:
+        # Create and run enhanced live bot
+        bot = LiveForexTelegramBot(
+            telegram_token=TELEGRAM_BOT_TOKEN,
+            api_key=TWELVEDATA_API_KEY if TWELVEDATA_API_KEY != "YOUR_TWELVEDATA_API_KEY_HERE" else None
+        )
+
+        print("\n🚀 ENHANCED LIVE FOREX BOT v3.0")
+        print("===============================")
+        print(f"📊 Supporting {len(CurrencyPairValidator.VALID_PAIRS)} currency pairs")
+        print("💱 Majors, Crosses, Minors & Exotics")
+        print("🔄 24/7 Live monitoring with batch processing")
+        print("⚡ Instant global market alerts")
+        print("🌍 Global market coverage")
+        print("\nStarting bot...")
+
+        bot.run()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed: {e}")
+
+if __name__ == "__main__":
+    main()
