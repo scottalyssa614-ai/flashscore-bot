@@ -1137,7 +1137,33 @@ Choose an option below or type a command!
                     self._save_settings()
                     logger.info(f"Sent {len(signals_found)} live alerts")
                 else:
-                    logger.info(f"No signals found in this scan cycle")
+                    # Send no-signal notification
+                    current_time = datetime.now().strftime('%H:%M UTC')
+                    pairs_scanned = ", ".join([pair[0] for pair in self.monitored_pairs])
+                    no_signal_message = f"""
+📊 **Scan Complete - No Signals Found**
+
+⏰ **Time:** {current_time}
+🔍 **Scanned:** {pairs_scanned}
+📈 **Status:** No trading opportunities detected
+⚪ **Next scan in {self.settings.interval_minutes} minutes**
+
+💡 Waiting for better market conditions...
+                    """
+                    
+                    # Send to all subscribed users
+                    for user_id in self.settings.subscribed_users.copy():
+                        try:
+                            await self.application.bot.send_message(
+                                user_id, no_signal_message.strip(), parse_mode='Markdown'
+                            )
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            logger.error(f"Failed to send no-signal alert to user {user_id}: {e}")
+                            if "chat not found" in str(e).lower():
+                                self.settings.subscribed_users.discard(user_id)
+                    
+                    logger.info(f"No signals found in this scan cycle - notified users")
 
                 # Wait for next full scan cycle
                 logger.info(f"Waiting {self.settings.interval_minutes} minutes for next scan...")
