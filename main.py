@@ -1154,10 +1154,18 @@ Choose an option below or type a command!
         """Enhanced help command"""
         await update.message.reply_text(help_message, parse_mode='Markdown')
 
+    async def post_init(self, application):
+        """Post-initialization hook to start auto alerts after event loop is running"""
+        if self.settings.auto_alerts and self.settings.subscribed_users:
+            await self._start_auto_alerts()
+
     def run(self):
         """Start the enhanced bot"""
         # Create application
         self.application = Application.builder().token(self.telegram_token).build()
+
+        # Add post init hook
+        self.application.post_init = self.post_init
 
         # Add handlers
         self.application.add_handler(CommandHandler("start", self.start_command))
@@ -1169,10 +1177,6 @@ Choose an option below or type a command!
         self.application.add_handler(CommandHandler("alerts", self.alerts_command))
         self.application.add_handler(CommandHandler("config", self.config_command))
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
-
-        # Start auto alerts if enabled
-        if self.settings.auto_alerts and self.settings.subscribed_users:
-            asyncio.create_task(self._start_auto_alerts())
 
         # Start the bot
         logger.info("Starting Enhanced Forex Telegram Bot v2.0...")
