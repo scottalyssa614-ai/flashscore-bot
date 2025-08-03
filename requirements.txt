@@ -8,3 +8,13 @@ telegram
 requests
 nest-asyncio
 yfinance
+aiohttp
+beautifulsoup4
+aiohttp
+beautifulsoup4
+aiohttp
+beautifulsoup4
+aiohttp
+beautifulsoup4
+aiohttp
+beautifulsoup4
