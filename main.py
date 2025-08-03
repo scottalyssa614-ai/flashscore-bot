@@ -423,7 +423,7 @@ class TelegramBot:
 
         return message
 
-    def format_predictions_summary(self, self, predictions: List[Dict]) -> str:
+    def format_predictions_summary(self, predictions: List[Dict]) -> str:
         """Format summary header"""
         today = datetime.now().strftime("%A, %B %d, %Y")
         message = f"🏆 <b>DAILY FOOTBALL PREDICTIONS</b>\n"
