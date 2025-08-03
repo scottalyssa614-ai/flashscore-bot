@@ -645,7 +645,54 @@ class PredictionEngine:
                 confidence = 0.55 + (combined_rate - 0.5) * 0.6
             else:
                 prediction = "No"
-                confidence = 0.55 + (0.5 - combined_btts_rate) * 0.7
+                confidence = 0.55 + (0.5 - combined_rate) * 0.7
+
+        return {
+            "prediction": prediction,
+            "confidence": min(confidence, 0.9)
+        }
+
+    def predict_btts(self, home_analysis: Dict, away_analysis: Dict, h2h_analysis: Dict) -> Dict:
+        """Predict Both Teams to Score with varied outcomes"""
+
+        # BTTS rates from recent form
+        home_btts_rate = home_analysis["btts_rate"]
+        away_btts_rate = away_analysis["btts_rate"]
+        h2h_btts_rate = h2h_analysis["btts_rate"]
+
+        # Attack strength vs defense weakness
+        home_attack = home_analysis["goals_per_game"]
+        away_attack = away_analysis["goals_per_game"]
+        home_defense = home_analysis["goals_conceded_per_game"]
+        away_defense = away_analysis["goals_conceded_per_game"]
+
+        # Both teams scoring likelihood
+        home_scores_prob = (home_attack > 0.8 and away_defense > 0.6)
+        away_scores_prob = (away_attack > 0.8 and home_defense > 0.6)
+
+        # Combined BTTS probability
+        combined_btts_rate = (home_btts_rate + away_btts_rate) / 2
+        if h2h_analysis["total_matches"] >= 3:
+            combined_btts_rate = (combined_btts_rate * 0.7) + (h2h_btts_rate * 0.3)
+
+        # Clean sheet factor - if either team keeps many clean sheets, lean No
+        clean_sheet_factor = max(home_analysis["clean_sheet_rate"], away_analysis["clean_sheet_rate"])
+
+        # Make varied prediction
+        if combined_btts_rate > 0.6 and home_scores_prob and away_scores_prob and clean_sheet_factor < 0.3:
+            prediction = "Yes"
+            confidence = 0.6 + min(combined_btts_rate * 0.3, 0.3)
+        elif clean_sheet_factor > 0.5 or min(home_attack, away_attack) < 0.5:
+            prediction = "No"
+            confidence = 0.6 + min((1 - combined_btts_rate) * 0.3, 0.3)
+        else:
+            # More balanced approach
+            if combined_btts_rate > 0.5 and min(home_attack, away_attack) > 0.7:
+                prediction = "Yes"
+                confidence = 0.55 + (combined_btts_rate - 0.5) * 0.7
+            else:
+                prediction = "No"
+                confidence = 0.55 + (0.5 - combined_btts_rate) * 0.6
 
         return {
             "prediction": prediction,
@@ -1181,51 +1228,4 @@ if __name__ == "__main__":
 
         asyncio.run(test_predictions())
     else:
-        asyncio.run(main())Under 2.5"
-                confidence = 0.55 + (0.5 - combined_rate) * 0.6
-
-        return {
-            "prediction": prediction,
-            "confidence": min(confidence, 0.9)
-        }
-
-    def predict_btts(self, home_analysis: Dict, away_analysis: Dict, h2h_analysis: Dict) -> Dict:
-        """Predict Both Teams to Score with varied outcomes"""
-
-        # BTTS rates from recent form
-        home_btts_rate = home_analysis["btts_rate"]
-        away_btts_rate = away_analysis["btts_rate"]
-        h2h_btts_rate = h2h_analysis["btts_rate"]
-
-        # Attack strength vs defense weakness
-        home_attack = home_analysis["goals_per_game"]
-        away_attack = away_analysis["goals_per_game"]
-        home_defense = home_analysis["goals_conceded_per_game"]
-        away_defense = away_analysis["goals_conceded_per_game"]
-
-        # Both teams scoring likelihood
-        home_scores_prob = (home_attack > 0.8 and away_defense > 0.6)
-        away_scores_prob = (away_attack > 0.8 and home_defense > 0.6)
-
-        # Combined BTTS probability
-        combined_btts_rate = (home_btts_rate + away_btts_rate) / 2
-        if h2h_analysis["total_matches"] >= 3:
-            combined_btts_rate = (combined_btts_rate * 0.7) + (h2h_btts_rate * 0.3)
-
-        # Clean sheet factor - if either team keeps many clean sheets, lean No
-        clean_sheet_factor = max(home_analysis["clean_sheet_rate"], away_analysis["clean_sheet_rate"])
-
-        # Make varied prediction
-        if combined_btts_rate > 0.6 and home_scores_prob and away_scores_prob and clean_sheet_factor < 0.3:
-            prediction = "Yes"
-            confidence = 0.6 + min(combined_btts_rate * 0.3, 0.3)
-        elif clean_sheet_factor > 0.5 or min(home_attack, away_attack) < 0.5:
-            prediction = "No"
-            confidence = 0.6 + min((1 - combined_btts_rate) * 0.3, 0.3)
-        else:
-            # More balanced approach
-            if combined_btts_rate > 0.5 and min(home_attack, away_attack) > 0.7:
-                prediction = "Yes"
-                confidence = 0.55 + (combined_btts_rate - 0.5) * 0.7
-            else:
-                prediction = "
+        asyncio.run(main())
