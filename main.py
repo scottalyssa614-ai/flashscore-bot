@@ -17,7 +17,6 @@ from typing import Dict, List, Optional, Any
 import requests
 from bs4 import BeautifulSoup
 import re
-import aiohttp
 
 # Configure logging
 logging.basicConfig(
