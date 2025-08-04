@@ -1,0 +1,80 @@
+2025-08-04 09:09:20,972 - asyncio - DEBUG - Using selector: EpollSelector
+🌐 Using Forebet Mathematical Predictions for predictions
+2025-08-04 09:09:20,973 - __main__ - INFO - Starting Forebet Mathematical Predictions Football Prediction Bot...
+2025-08-04 09:09:21,285 - __main__ - INFO - Telegram bot initialized successfully
+2025-08-04 09:09:21,286 - __main__ - INFO - Telegram bot initialized successfully
+🔄 Professional Football Analytics Bot is now running!
+🕷️ Using safe Forebet Mathematical Predictions scraping with anti-ban protection
+🚀 Starting Forebet Mathematical Predictions scraping and prediction analysis...
+2025-08-04 09:09:21,286 - __main__ - INFO - Starting immediate prediction generation with Forebet Mathematical Predictions scraping...
+🕷️ Scraping Forebet Mathematical Predictions for live match data...
+🕷️ Starting safe scraping session from Forebet Mathematical Predictions...
+⚠️ Respecting rate limits to avoid detection
+2025-08-04 09:09:21,286 - __main__ - INFO - 🌐 Fetching with requests: https://www.forebet.com/en/football-tips-and-predictions-for-today (attempt 1)
+2025-08-04 09:09:21,288 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): www.forebet.com:443
+2025-08-04 09:09:23,029 - urllib3.connectionpool - DEBUG - https://www.forebet.com:443 "GET /en/football-tips-and-predictions-for-today HTTP/1.1" 200 None
+2025-08-04 09:09:23,134 - __main__ - INFO - ✅ Page fetched successfully
+2025-08-04 09:09:23,134 - __main__ - DEBUG - 📋 Response headers: {'Date': 'Mon, 04 Aug 2025 09:09:23 GMT', 'Content-Type': 'text/html; charset=utf-8', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Content-Encoding': 'br', 'Set-Cookie': 'PHPSESSID=ppckfg7mfu591c2kcvh1ojac85; path=/, lang=deleted; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0; path=/, jfcookie=deleted; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0; path=/, jfcookie[lang]=en; expires=Tue, 05-Aug-2025 09:09:21 GMT; Max-Age=86400; path=/, SRV=forebet1-10; path=/', 'P3P': 'CP="NOI ADM DEV PSAi COM NAV OUR OTRo STP IND DEM"', 'x-logged-in': 'False', 'Expires': 'Mon, 1 Jan 2001 00:00:00 GMT', 'Last-Modified': 'Mon, 04 Aug 2025 09:09:22 GMT', 'Cache-Control': 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0', 'Pragma': 'no-cache', 'Vary': 'Accept-Encoding', 'CF-Cache-Status': 'BYPASS', 'Server-Timing': 'cfCacheStatus;desc="BYPASS", cfOrigin;dur=1678,cfEdge;dur=20', 'Server': 'cloudflare', 'CF-RAY': '969cea584e216747-ATL'}
+2025-08-04 09:09:23,135 - __main__ - DEBUG - 📋 Content-Type: text/html; charset=utf-8, Content-Encoding: br
+2025-08-04 09:09:23,135 - __main__ - ERROR - ❌ Brotli decompression error: BrotliDecompress failed
+2025-08-04 09:09:23,901 - __main__ - DEBUG - 📄 Page content snippet (first 2000 chars): 
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-gb" lang="en-gb" >
+
+<head>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-7LGKT05LES"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-7LGKT05LES');
+</script>
+
+
+
+
+  <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+  <meta name="robots" content="index, follow" />
+  <meta name="keywords" content="Football predictions, mathematical football predictions, forebet, football, stats, scores, statistics, match previews, livescore, live scores, live predictions" />
+  <meta name="description" content="Free mathematical football predictions and scores for today matches. Covering over 700 leagues." />
+  <meta name="generator" content="" />
+  <title>Football Predictions for Today | Forebet</title>
+  <!-- Head Sets -->
+  <meta property="og:title" content="Football Predictions for Today | Forebet" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://www.forebet.com/images/square-front2.jpg" />
+  <meta property="og:url" content="https://www.forebet.com//en/football-tips-and-predictions-for-today" />
+  <meta property="og:site_name" content="Forebet Predictions" />
+  <link rel="image_src" href="https://www.forebet.com/images/square-front2.jpg" />
+  <meta property="fb:app_id" content="198675880207544" />
+  <link rel="alternate" href="https://www.forebet.com/de/fussballprognosen-fur-heute" hreflang="de" />  <link rel="alternate" href="https://www.forebet.com/ru/prognozi-na-segodnq" hreflang="ru" />  <link rel="alternate" href="https://www.forebet.com/es/predicciones-para-hoy" hreflang="es" />  <link rel="alternate" href="https://www.forebet.com/bg/prognozi-za-dnes" hreflang="bg
+2025-08-04 09:09:23,901 - __main__ - INFO - ✅ Page contains match-related content
+2025-08-04 09:09:23,901 - __main__ - INFO - 🔍 Parsing Forebet Mathematical Predictions football page...
+2025-08-04 09:09:24,861 - __main__ - DEBUG - Testing selector 'div.match, div.match-row, div.event, div.event-row, div.game, div.game-row, div.fixture, div.prediction-row, div.game-item, div.schema': found 3 elements
+2025-08-04 09:09:24,862 - __main__ - INFO - ✅ Found 3 potential matches with selector: div.match, div.match-row, div.event, div.event-row, div.game, div.game-row, div.fixture, div.prediction-row, div.game-item, div.schema
+2025-08-04 09:09:25,258 - __main__ - DEBUG - Team extraction: home=Measurers, away=Patha Chakra, elements_found=0, links_found=0, spans_found=174
+2025-08-04 09:09:25,260 - __main__ - DEBUG - Match time extracted: 04/08/2025 11:30
+2025-08-04 09:09:25,267 - __main__ - DEBUG - League extracted: Unknown League
+2025-08-04 09:09:25,477 - __main__ - DEBUG - Odds extracted: {'1': '100.0', 'X': '100.0', '2': '50.0'}
+2025-08-04 09:09:25,479 - __main__ - DEBUG - ✅ Extracted: Measurers vs Patha Chakra
+2025-08-04 09:09:25,481 - __main__ - DEBUG - Team extraction: home=Hearts, away=Aberdeen, elements_found=0, links_found=0, spans_found=2
+2025-08-04 09:09:25,482 - __main__ - DEBUG - Match time extracted: 04/08/2025 21:00
+2025-08-04 09:09:25,492 - __main__ - DEBUG - League extracted: Unknown League
+2025-08-04 09:09:25,493 - __main__ - DEBUG - Odds extracted: {'1': 'N/A', 'X': 'N/A', '2': 'N/A'}
+2025-08-04 09:09:25,493 - __main__ - DEBUG - ✅ Extracted: Hearts vs Aberdeen
+2025-08-04 09:09:25,495 - __main__ - DEBUG - Team extraction: home=Cuiabá, away=Volta Redonda, elements_found=0, links_found=0, spans_found=2
+2025-08-04 09:09:25,495 - __main__ - DEBUG - Match time extracted: 05/08/2025 02:30
+2025-08-04 09:09:25,565 - __main__ - DEBUG - League extracted: Unknown League
+2025-08-04 09:09:25,566 - __main__ - DEBUG - Odds extracted: {'1': 'N/A', 'X': 'N/A', '2': 'N/A'}
+2025-08-04 09:09:25,566 - __main__ - DEBUG - ✅ Extracted: Cuiabá vs Volta Redonda
+2025-08-04 09:09:25,566 - __main__ - INFO - 🎯 Successfully scraped 3 unique matches from Forebet Mathematical Predictions
+⚽ Found 3 matches from Forebet Mathematical Predictions
+✅ Successfully scraped 3 matches from Forebet Mathematical Predictions!
+2025-08-04 09:09:25,566 - __main__ - INFO - Selected 0 high-confidence predictions
+2025-08-04 09:09:25,566 - __main__ - WARNING - No high-confidence predictions generated
+2025-08-04 09:09:25,705 - __main__ - DEBUG - Message sent successfully
+2025-08-04 09:09:25,706 - __main__ - INFO - Bot predictions completed successfully
+🎯 Prediction analysis complete!
+2025-08-04 09:09:25,707 - __main__ - INFO - Bot execution completed
