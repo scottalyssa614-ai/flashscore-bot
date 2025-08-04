@@ -485,6 +485,34 @@ class BettingScraper:
             else:
                 # Alternative odds extraction
                 number_elements = match_element.find_all(['span', 'div'], string=re.compile(r'^\d+\.\d{2}'))
+                if len(number_elements) >= 3:
+                    try:
+                        odds["1"] = number_elements[0].get_text(strip=True)
+                        odds["X"] = number_elements[1].get_text(strip=True)
+                        odds["2"] = number_elements[2].get_text(strip=True)
+                    except:
+                        pass
+
+            # Validate we found meaningful team names
+            if (home_team == "Unknown" or away_team == "Unknown" or 
+                len(home_team) < 2 or len(away_team) < 2):
+                return None
+
+            return {
+                "home_team": home_team,
+                "away_team": away_team,
+                "match_time": match_time,
+                "league": league,
+                "odds": odds,
+                "home_form": [],
+                "away_form": [],
+                "scraped_at": datetime.now().isoformat(),
+                "source": "Betway Nigeria"
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error extracting Betway match data: {e}")
+            return None
 
     def scrape_football_matches(self, debug: bool = False) -> List[Dict]:
         """Enhanced scraping with better detection and debugging"""
