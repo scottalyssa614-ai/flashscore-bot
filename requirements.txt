@@ -10,11 +10,5 @@ nest-asyncio
 yfinance
 aiohttp
 beautifulsoup4
-aiohttp
-beautifulsoup4
-aiohttp
-beautifulsoup4
-aiohttp
-beautifulsoup4
-aiohttp
-beautifulsoup4
+selenium
+webdriver-manager
