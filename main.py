@@ -131,6 +131,9 @@ class FootballPredictor:
             recent_form_wins=recent_wins,
             recent_form_draws=recent_draws,
             recent_form_losses=recent_losses,
+            recent_games_count=recent_games
+        )
+
     def _extract_team_form(self, team_name: str, full_text: str, is_home: bool) -> Tuple[int, int, int]:
         """Extract specific team's recent form from text"""
 
@@ -193,9 +196,6 @@ class FootballPredictor:
                         'games_played': int(numbers[3]) if len(numbers) > 3 else 20
                     }
         return {}
-
-            recent_games_count=recent_games
-        )
 
     def parse_head_to_head(self, stats_text: str) -> HeadToHeadRecord:
         """Parse head-to-head record from stats text"""
