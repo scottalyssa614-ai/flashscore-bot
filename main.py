@@ -476,59 +476,11 @@ Just paste your stats and let me do the analysis! ⚽
 # Main execution
 if __name__ == "__main__":
     # Configuration
-    BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"  # Replace with your actual bot token
+    BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"
 
-    # For testing without Telegram (you can test the predictor directly)
-    def test_predictor():
-        predictor = FootballPredictor()
-
-        # Your sample data
-        sample_stats = """
-STANDINGS UP TO 18/08/2025
-CLAUSURA	PTS	GP	W	D	L	GF	GA	+/-
-1	América de Cali	39	20	11	6	3	29	12	17
-2	Millonarios	38	20	11	5	4	30	17	13
-3	Junior Barranquilla	37	20	10	7	3	26	16	10
-4	Deportes Tolima	36	20	10	6	4	30	19	11
-
-Deportes Tolima 2
-33%
-Draw 1
-17%
-Millonarios 3
-50%
-
-Win 3
-50%
-Draw 1
-17%
-Lost 2
-33%
-
-Win 1
-17%
-Draw 1
-17%
-Lost 4
-67%
-        """
-
-        result = predictor.predict_match(sample_stats)
-        print(f"Prediction: {result.predicted_outcome.value}")
-        print(f"Score: {result.predicted_score}")
-        print(f"Confidence: {result.confidence_score:.1%}")
-        print("Reasoning:")
-        for reason in result.reasoning:
-            print(f"  - {reason}")
-
-    # Uncomment to test without Telegram
-    # test_predictor()
-
-    # To run the Telegram bot, uncomment these lines:
-    # bot = TelegramFootballBot(BOT_TOKEN)
-    # bot.run()
-
-    print("Replace BOT_TOKEN with your actual Telegram bot token and uncomment the bot.run() line to start!")
+    # Start the Telegram bot
+    bot = TelegramFootballBot(BOT_TOKEN)
+    bot.run()
 
 # Installation requirements for Replit:
 """
