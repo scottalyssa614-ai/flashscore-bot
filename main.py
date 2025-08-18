@@ -627,7 +627,7 @@ Just paste your stats and let me do the analysis! ⚽
 # Main execution
 if __name__ == "__main__":
     # Configuration
-    BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"  # Replace with your actual bot token
+    BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"
 
     # For testing without Telegram (you can test the predictor directly)
     def test_predictor():
@@ -675,11 +675,9 @@ Lost 4
     # Uncomment to test without Telegram
     # test_predictor()
 
-    # To run the Telegram bot, uncomment these lines:
-    # bot = TelegramFootballBot(BOT_TOKEN)
-    # bot.run()
-
-    print("Replace BOT_TOKEN with your actual Telegram bot token and uncomment the bot.run() line to start!")
+    # Start the Telegram bot
+    bot = TelegramFootballBot(BOT_TOKEN)
+    bot.run()
 
 # Installation requirements for Replit:
 """
