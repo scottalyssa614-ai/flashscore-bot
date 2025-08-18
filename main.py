@@ -400,6 +400,8 @@ class FootballPredictor:
                 reasoning.append(f"{away_team.name} leads head-to-head record")
             else:
                 reasoning.append("Even head-to-head record")
+        
+        return reasoning
 
     def _parse_dict_stats(self, stats_dict: Dict) -> Tuple[TeamStats, TeamStats, HeadToHeadRecord]:
         """Parse dictionary format stats"""
