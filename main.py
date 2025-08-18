@@ -197,12 +197,16 @@ class FootballPredictor:
 
         return win_rate
 
-    def predict_match(self, stats_text: str) -> PredictionResult:
-        """Main prediction function"""
+    def predict_match(self, stats_input) -> PredictionResult:
+        """Main prediction function - accepts text or dictionary"""
 
-        # Parse the data
-        home_team, away_team = self.parse_team_stats(stats_text)
-        h2h = self.parse_head_to_head(stats_text)
+        if isinstance(stats_input, dict):
+            # Handle dictionary input
+            home_team, away_team, h2h = self._parse_dict_stats(stats_input)
+        else:
+            # Handle text input (original method)
+            home_team, away_team = self.parse_team_stats(stats_input)
+            h2h = self.parse_head_to_head(stats_input)
 
         # Calculate component scores
         home_scores = {
@@ -305,7 +309,62 @@ class FootballPredictor:
             else:
                 reasoning.append("Even head-to-head record")
 
-        return reasoning
+    def _parse_dict_stats(self, stats_dict: Dict) -> Tuple[TeamStats, TeamStats, HeadToHeadRecord]:
+        """Parse dictionary format stats"""
+
+        home_data = stats_dict['home_team']
+        away_data = stats_dict['away_team']
+        h2h_data = stats_dict.get('head_to_head', {})
+
+        home_team = TeamStats(
+            name=home_data['name'],
+            position=home_data['league_position'],
+            points=home_data['points'],
+            games_played=home_data['games_played'],
+            wins=home_data['wins'],
+            draws=home_data['draws'],
+            losses=home_data['losses'],
+            goals_for=home_data['goals_for'],
+            goals_against=home_data['goals_against'],
+            goal_difference=home_data['goals_for'] - home_data['goals_against'],
+            goals_per_game=home_data['goals_for'] / max(home_data['games_played'], 1),
+            goals_conceded_per_game=home_data['goals_against'] / max(home_data['games_played'], 1),
+            clean_sheets=home_data.get('clean_sheets', 0),
+            recent_form_wins=home_data.get('recent_wins', 0),
+            recent_form_draws=home_data.get('recent_draws', 0),
+            recent_form_losses=home_data.get('recent_losses', 0),
+            recent_games_count=home_data.get('recent_games', 6)
+        )
+
+        away_team = TeamStats(
+            name=away_data['name'],
+            position=away_data['league_position'],
+            points=away_data['points'],
+            games_played=away_data['games_played'],
+            wins=away_data['wins'],
+            draws=away_data['draws'],
+            losses=away_data['losses'],
+            goals_for=away_data['goals_for'],
+            goals_against=away_data['goals_against'],
+            goal_difference=away_data['goals_for'] - away_data['goals_against'],
+            goals_per_game=away_data['goals_for'] / max(away_data['games_played'], 1),
+            goals_conceded_per_game=away_data['goals_against'] / max(away_data['games_played'], 1),
+            clean_sheets=away_data.get('clean_sheets', 0),
+            recent_form_wins=away_data.get('recent_wins', 0),
+            recent_form_draws=away_data.get('recent_draws', 0),
+            recent_form_losses=away_data.get('recent_losses', 0),
+            recent_games_count=away_data.get('recent_games', 6)
+        )
+
+        h2h = HeadToHeadRecord(
+            home_team_wins=h2h_data.get('home_wins', 0),
+            away_team_wins=h2h_data.get('away_wins', 0),
+            draws=h2h_data.get('draws', 0),
+            total_games=h2h_data.get('total_games', 0),
+            recent_results=h2h_data.get('recent_results', [])
+        )
+
+        return home_team, away_team, h2h
 
 # Telegram Bot Integration
 import asyncio
@@ -476,11 +535,59 @@ Just paste your stats and let me do the analysis! ⚽
 # Main execution
 if __name__ == "__main__":
     # Configuration
-    BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"
+    BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"  # Replace with your actual bot token
 
-    # Start the Telegram bot
-    bot = TelegramFootballBot(BOT_TOKEN)
-    bot.run()
+    # For testing without Telegram (you can test the predictor directly)
+    def test_predictor():
+        predictor = FootballPredictor()
+
+        # Your sample data
+        sample_stats = """
+STANDINGS UP TO 18/08/2025
+CLAUSURA	PTS	GP	W	D	L	GF	GA	+/-
+1	América de Cali	39	20	11	6	3	29	12	17
+2	Millonarios	38	20	11	5	4	30	17	13
+3	Junior Barranquilla	37	20	10	7	3	26	16	10
+4	Deportes Tolima	36	20	10	6	4	30	19	11
+
+Deportes Tolima 2
+33%
+Draw 1
+17%
+Millonarios 3
+50%
+
+Win 3
+50%
+Draw 1
+17%
+Lost 2
+33%
+
+Win 1
+17%
+Draw 1
+17%
+Lost 4
+67%
+        """
+
+        result = predictor.predict_match(sample_stats)
+        print(f"Prediction: {result.predicted_outcome.value}")
+        print(f"Score: {result.predicted_score}")
+        print(f"Confidence: {result.confidence_score:.1%}")
+        print("Reasoning:")
+        for reason in result.reasoning:
+            print(f"  - {reason}")
+
+    # Uncomment to test without Telegram
+    # test_predictor()
+
+    # To run the Telegram bot, uncomment these lines:
+    # bot = TelegramFootballBot(BOT_TOKEN)
+    # bot.run()
+
+    print("Replace BOT_TOKEN with your actual Telegram bot token and uncomment the bot.run() line to start!")
 
 # Installation requirements for Replit:
 """
