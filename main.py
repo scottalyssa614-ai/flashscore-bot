@@ -25,7 +25,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Get from @BotFather
+import os
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")  # Get from @BotFather
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex"
 CHECK_INTERVAL = 300  # 5 minutes
