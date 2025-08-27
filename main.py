@@ -1,708 +1,681 @@
-import re
-import json
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
-from enum import Enum
+#!/usr/bin/env python3
+"""
+🔥 Ultimate Memecoin Alert Bot for Telegram
+Monitor multiple memecoins and get smart trading alerts!
+"""
 
-class MatchOutcome(Enum):
-    HOME_WIN = "HOME_WIN"
-    AWAY_WIN = "AWAY_WIN"
-    DRAW = "DRAW"
-
-@dataclass
-class TeamStats:
-    name: str
-    position: int
-    points: int
-    games_played: int
-    wins: int
-    draws: int
-    losses: int
-    goals_for: int
-    goals_against: int
-    goal_difference: int
-    goals_per_game: float
-    goals_conceded_per_game: float
-    clean_sheets: int
-    recent_form_wins: int
-    recent_form_draws: int
-    recent_form_losses: int
-    recent_games_count: int
-
-@dataclass
-class HeadToHeadRecord:
-    home_team_wins: int
-    away_team_wins: int
-    draws: int
-    total_games: int
-    recent_results: List[str]  # Recent match results
-
-@dataclass
-class PredictionResult:
-    predicted_outcome: MatchOutcome
-    confidence_score: float
-    predicted_score: str
-    reasoning: List[str]
-    key_factors: Dict[str, float]
-
-class FootballPredictor:
-    def __init__(self):
-        self.weights = {
-            'league_position': 0.15,
-            'recent_form': 0.25,
-            'head_to_head': 0.20,
-            'attack_strength': 0.15,
-            'defense_strength': 0.15,
-            'home_advantage': 0.10
-        }
-
-    def parse_team_stats(self, stats_text: str) -> Tuple[TeamStats, TeamStats]:
-        """Parse team statistics from the provided text format"""
-
-        # Extract league table
-        standings_pattern = r'(\d+)\s+([^0-9]+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([+-]?\d+)'
-        standings_matches = re.findall(standings_pattern, stats_text)
-
-        teams_data = {}
-        for match in standings_matches:
-            pos, name, pts, gp, w, d, l, gf, ga, gd = match
-            # Clean team name
-            name = name.strip()
-            if name not in teams_data:
-                teams_data[name] = {
-                    'position': int(pos),
-                    'points': int(pts),
-                    'games_played': int(gp),
-                    'wins': int(w),
-                    'draws': int(d),
-                    'losses': int(l),
-                    'goals_for': int(gf),
-                    'goals_against': int(ga),
-                    'goal_difference': int(gd)
-                }
-
-        # Find the two main teams (usually the ones with most recent matches)
-        team_names = list(teams_data.keys())
-        home_team_name = None
-        away_team_name = None
-
-        # Try to identify teams from match data
-        for name in team_names:
-            if "millonarios" in name.lower():
-                away_team_name = name
-            elif "tolima" in name.lower():
-                home_team_name = name
-
-        # If we can't identify specifically, take first two teams
-        if not home_team_name or not away_team_name:
-            home_team_name = team_names[0] if len(team_names) > 0 else "Team A"
-            away_team_name = team_names[1] if len(team_names) > 1 else "Team B"
-
-        # Create team stats objects
-        home_stats = self._create_team_stats(home_team_name, teams_data.get(home_team_name, {}), stats_text, True)
-        away_stats = self._create_team_stats(away_team_name, teams_data.get(away_team_name, {}), stats_text, False)
-
-        return home_stats, away_stats
-
-    def _create_team_stats(self, name: str, basic_stats: Dict, full_text: str, is_home: bool) -> TeamStats:
-        """Create TeamStats object from parsed data"""
-
-        # Extract recent form specifically for this team
-        recent_wins, recent_draws, recent_losses = self._extract_team_form(name, full_text, is_home)
-
-        recent_games = recent_wins + recent_draws + recent_losses
-        if recent_games == 0:
-            recent_games = 6  # Default
-
-        return TeamStats(
-            name=name,
-            position=basic_stats.get('position', 10),
-            points=basic_stats.get('points', 0),
-            games_played=basic_stats.get('games_played', 20),
-            wins=basic_stats.get('wins', 0),
-            draws=basic_stats.get('draws', 0),
-            losses=basic_stats.get('losses', 0),
-            goals_for=basic_stats.get('goals_for', 0),
-            goals_against=basic_stats.get('goals_against', 0),
-            goal_difference=basic_stats.get('goal_difference', 0),
-            goals_per_game=basic_stats.get('goals_for', 0) / max(basic_stats.get('games_played', 1), 1),
-            goals_conceded_per_game=basic_stats.get('goals_against', 0) / max(basic_stats.get('games_played', 1), 1),
-            clean_sheets=basic_stats.get('clean_sheets', 0),
-            recent_form_wins=recent_wins,
-            recent_form_draws=recent_draws,
-            recent_form_losses=recent_losses,
-            recent_games_count=recent_games
-        )
-
-    def _extract_team_form(self, team_name: str, full_text: str, is_home: bool) -> Tuple[int, int, int]:
-        """Extract specific team's recent form from text"""
-
-        # Look for team-specific form data or use positional parsing
-        lines = full_text.split('\n')
-
-        # Try to find form data near team name or in sections
-        form_patterns = [
-            r'Win\s+(\d+)\s+\d*%?\s*Draw\s+(\d+)\s+\d*%?\s*Lost?\s+(\d+)\s+\d*%?',
-            r'W\s*(\d+)\s*D\s*(\d+)\s*L\s*(\d+)',
-            r'(\d+)W\s*(\d+)D\s*(\d+)L'
-        ]
-
-        all_form_matches = []
-        for pattern in form_patterns:
-            matches = re.findall(pattern, full_text)
-            all_form_matches.extend(matches)
-
-        # If we have multiple form records, assign them to home/away
-        if len(all_form_matches) >= 2:
-            # First form record goes to home team, second to away team
-            form_index = 0 if is_home else 1
-            if form_index < len(all_form_matches):
-                wins = int(all_form_matches[form_index][0])
-                draws = int(all_form_matches[form_index][1])
-                losses = int(all_form_matches[form_index][2])
-                return wins, draws, losses
-        elif len(all_form_matches) == 1:
-            # Only one form record found, use it for both (will differentiate later)
-            wins = int(all_form_matches[0][0])
-            draws = int(all_form_matches[0][1])
-            losses = int(all_form_matches[0][2])
-
-            # Slightly modify based on league position to create difference
-            if is_home:
-                return wins, draws, losses
-            else:
-                # Adjust away team form based on relative league position
-                return max(0, wins-1), draws, losses+1
-
-        # Fallback: estimate from league performance
-        if basic_stats := self._get_team_basic_stats(team_name, full_text):
-            win_rate = basic_stats.get('wins', 0) / max(basic_stats.get('games_played', 1), 1)
-            estimated_wins = int(win_rate * 6)
-            estimated_losses = 6 - estimated_wins - 1
-            return estimated_wins, 1, estimated_losses
-
-        return 2, 1, 3  # Default form
-
-    def _get_team_basic_stats(self, team_name: str, full_text: str) -> Dict:
-        """Get basic stats for a specific team"""
-        lines = full_text.split('\n')
-        for line in lines:
-            if team_name.lower() in line.lower():
-                # Try to extract numbers from this line
-                numbers = re.findall(r'\d+', line)
-                if len(numbers) >= 8:
-                    return {
-                        'wins': int(numbers[4]) if len(numbers) > 4 else 0,
-                        'games_played': int(numbers[3]) if len(numbers) > 3 else 20
-                    }
-        return {}
-
-    def parse_head_to_head(self, stats_text: str) -> HeadToHeadRecord:
-        """Parse head-to-head record from stats text"""
-
-        try:
-            # Look for H2H summary with different patterns
-            h2h_patterns = [
-                r'(\w+[\s\w]*)\s+(\d+)\s+(\d+)%\s+Draw\s+(\d+)\s+(\d+)%\s+([\w\s]+)\s+(\d+)\s+(\d+)%',
-                r'H2H:\s*(\d+)-(\d+)-(\d+)',  # Format: H2H: 3-1-2 (wins-draws-losses)
-                r'(\d+)\s*wins?\s*(\d+)\s*draws?\s*(\d+)\s*wins?'
-            ]
-
-            for pattern in h2h_patterns:
-                h2h_match = re.search(pattern, stats_text)
-                if h2h_match:
-                    groups = h2h_match.groups()
-                    if len(groups) >= 7:  # Full format
-                        team1_wins = int(groups[1])
-                        draws = int(groups[3])
-                        team2_wins = int(groups[6])
-                    elif len(groups) >= 3:  # Simple format
-                        team1_wins = int(groups[0])
-                        draws = int(groups[1])
-                        team2_wins = int(groups[2])
-
-                    total = team1_wins + draws + team2_wins
-
-                    return HeadToHeadRecord(
-                        home_team_wins=team1_wins,
-                        away_team_wins=team2_wins,
-                        draws=draws,
-                        total_games=total,
-                        recent_results=[]
-                    )
-
-            # Extract from match results if no summary found
-            match_results = re.findall(r'(\d+)\s*-\s*(\d+)', stats_text)
-            if match_results:
-                home_wins = sum(1 for result in match_results if int(result[0]) > int(result[1]))
-                away_wins = sum(1 for result in match_results if int(result[1]) > int(result[0]))
-                draws = sum(1 for result in match_results if int(result[0]) == int(result[1]))
-
-                return HeadToHeadRecord(
-                    home_team_wins=home_wins,
-                    away_team_wins=away_wins,
-                    draws=draws,
-                    total_games=len(match_results),
-                    recent_results=[]
-                )
-
-        except Exception as e:
-            print(f"H2H parsing error: {e}")
-
-        # Default if no H2H found
-        return HeadToHeadRecord(0, 0, 0, 0, [])
-
-    def calculate_form_score(self, team: TeamStats) -> float:
-        """Calculate recent form score (0-1)"""
-        if team.recent_games_count == 0:
-            return 0.5
-
-        form_points = (team.recent_form_wins * 3 + team.recent_form_draws * 1)
-        max_possible = team.recent_games_count * 3
-        return form_points / max_possible
-
-    def calculate_league_strength(self, team: TeamStats, total_teams: int = 20) -> float:
-        """Calculate league position strength (0-1, higher is better)"""
-        return (total_teams - team.position + 1) / total_teams
-
-    def calculate_attack_strength(self, team: TeamStats) -> float:
-        """Calculate attacking strength based on goals per game"""
-        # Normalize around 1.5 goals per game as average
-        return min(team.goals_per_game / 2.0, 1.0)
-
-    def calculate_defense_strength(self, team: TeamStats) -> float:
-        """Calculate defensive strength (lower conceded = higher score)"""
-        # Normalize around 1.5 goals conceded per game
-        if team.goals_conceded_per_game == 0:
-            return 1.0
-        return max(0, 1 - (team.goals_conceded_per_game / 2.0))
-
-    def calculate_h2h_advantage(self, h2h: HeadToHeadRecord, is_home: bool) -> float:
-        """Calculate head-to-head advantage"""
-        if h2h.total_games == 0:
-            return 0.5
-
-        if is_home:
-            win_rate = h2h.home_team_wins / h2h.total_games
-        else:
-            win_rate = h2h.away_team_wins / h2h.total_games
-
-        return win_rate
-
-    def predict_match(self, stats_input) -> PredictionResult:
-        """Main prediction function - accepts text or dictionary"""
-
-        if isinstance(stats_input, dict):
-            # Handle dictionary input
-            home_team, away_team, h2h = self._parse_dict_stats(stats_input)
-        else:
-            # Handle text input (original method)
-            home_team, away_team = self.parse_team_stats(stats_input)
-            h2h = self.parse_head_to_head(stats_input)
-
-        # Calculate component scores
-        home_scores = {
-            'league_position': self.calculate_league_strength(home_team),
-            'recent_form': self.calculate_form_score(home_team),
-            'attack_strength': self.calculate_attack_strength(home_team),
-            'defense_strength': self.calculate_defense_strength(home_team),
-            'head_to_head': self.calculate_h2h_advantage(h2h, True),
-            'home_advantage': 0.55  # Standard home advantage
-        }
-
-        away_scores = {
-            'league_position': self.calculate_league_strength(away_team),
-            'recent_form': self.calculate_form_score(away_team),
-            'attack_strength': self.calculate_attack_strength(away_team),
-            'defense_strength': self.calculate_defense_strength(away_team),
-            'head_to_head': self.calculate_h2h_advantage(h2h, False),
-            'home_advantage': 0.45  # Away disadvantage
-        }
-
-        # Calculate weighted scores
-        home_total = sum(home_scores[key] * self.weights[key] for key in self.weights.keys())
-        away_total = sum(away_scores[key] * self.weights[key] for key in self.weights.keys())
-
-        # Determine outcome
-        score_difference = home_total - away_total
-
-        if abs(score_difference) < 0.05:  # Very close
-            outcome = MatchOutcome.DRAW
-            confidence = 0.6
-            predicted_score = "1-1"
-        elif score_difference > 0.1:  # Clear home advantage
-            outcome = MatchOutcome.HOME_WIN
-            confidence = min(0.8, 0.5 + abs(score_difference))
-            predicted_score = "2-1" if score_difference > 0.15 else "1-0"
-        elif score_difference < -0.1:  # Clear away advantage
-            outcome = MatchOutcome.AWAY_WIN
-            confidence = min(0.8, 0.5 + abs(score_difference))
-            predicted_score = "1-2" if score_difference < -0.15 else "0-1"
-        else:  # Slight advantage
-            if score_difference > 0:
-                outcome = MatchOutcome.DRAW  # Lean towards draw when close
-                predicted_score = "1-1"
-            else:
-                outcome = MatchOutcome.DRAW
-                predicted_score = "1-1"
-            confidence = 0.65
-
-        # Generate reasoning
-        reasoning = self._generate_reasoning(home_team, away_team, home_scores, away_scores, h2h)
-
-        return PredictionResult(
-            predicted_outcome=outcome,
-            confidence_score=confidence,
-            predicted_score=predicted_score,
-            reasoning=reasoning,
-            key_factors={'home_total': home_total, 'away_total': away_total, 'difference': score_difference}
-        )
-
-    def _generate_reasoning(self, home_team: TeamStats, away_team: TeamStats, 
-                          home_scores: Dict, away_scores: Dict, h2h: HeadToHeadRecord) -> List[str]:
-        """Generate human-readable reasoning for the prediction"""
-        reasoning = []
-
-        # League position comparison
-        if home_team.position < away_team.position:
-            reasoning.append(f"{home_team.name} has better league position ({home_team.position} vs {away_team.position})")
-        elif away_team.position < home_team.position:
-            reasoning.append(f"{away_team.name} has better league position ({away_team.position} vs {home_team.position})")
-        else:
-            reasoning.append("Teams are very close in league standings")
-
-        # Recent form
-        home_form_rate = home_team.recent_form_wins / max(home_team.recent_games_count, 1)
-        away_form_rate = away_team.recent_form_wins / max(away_team.recent_games_count, 1)
-
-        if home_form_rate > away_form_rate + 0.2:
-            reasoning.append(f"{home_team.name} has much better recent form")
-        elif away_form_rate > home_form_rate + 0.2:
-            reasoning.append(f"{away_team.name} has much better recent form")
-
-        # Goals comparison
-        if home_team.goals_per_game > away_team.goals_per_game + 0.2:
-            reasoning.append(f"{home_team.name} has stronger attack ({home_team.goals_per_game:.1f} vs {away_team.goals_per_game:.1f} goals/game)")
-        elif away_team.goals_per_game > home_team.goals_per_game + 0.2:
-            reasoning.append(f"{away_team.name} has stronger attack ({away_team.goals_per_game:.1f} vs {home_team.goals_per_game:.1f} goals/game)")
-
-        # Defense comparison
-        if home_team.goals_conceded_per_game < away_team.goals_conceded_per_game - 0.2:
-            reasoning.append(f"{home_team.name} has better defense ({home_team.goals_conceded_per_game:.1f} vs {away_team.goals_conceded_per_game:.1f} conceded/game)")
-        elif away_team.goals_conceded_per_game < home_team.goals_conceded_per_game - 0.2:
-            reasoning.append(f"{away_team.name} has better defense ({away_team.goals_conceded_per_game:.1f} vs {home_team.goals_conceded_per_game:.1f} conceded/game)")
-
-        # Head to head
-        if h2h.total_games > 0:
-            if h2h.home_team_wins > h2h.away_team_wins:
-                reasoning.append(f"{home_team.name} leads head-to-head record")
-            elif h2h.away_team_wins > h2h.home_team_wins:
-                reasoning.append(f"{away_team.name} leads head-to-head record")
-            else:
-                reasoning.append("Even head-to-head record")
-        
-        return reasoning
-
-    def _parse_dict_stats(self, stats_dict: Dict) -> Tuple[TeamStats, TeamStats, HeadToHeadRecord]:
-        """Parse dictionary format stats"""
-
-        home_data = stats_dict['home_team']
-        away_data = stats_dict['away_team']
-        h2h_data = stats_dict.get('head_to_head', {})
-
-        home_team = TeamStats(
-            name=home_data['name'],
-            position=home_data['league_position'],
-            points=home_data['points'],
-            games_played=home_data['games_played'],
-            wins=home_data['wins'],
-            draws=home_data['draws'],
-            losses=home_data['losses'],
-            goals_for=home_data['goals_for'],
-            goals_against=home_data['goals_against'],
-            goal_difference=home_data['goals_for'] - home_data['goals_against'],
-            goals_per_game=home_data['goals_for'] / max(home_data['games_played'], 1),
-            goals_conceded_per_game=home_data['goals_against'] / max(home_data['games_played'], 1),
-            clean_sheets=home_data.get('clean_sheets', 0),
-            recent_form_wins=home_data.get('recent_wins', 0),
-            recent_form_draws=home_data.get('recent_draws', 0),
-            recent_form_losses=home_data.get('recent_losses', 0),
-            recent_games_count=home_data.get('recent_games', 6)
-        )
-
-        away_team = TeamStats(
-            name=away_data['name'],
-            position=away_data['league_position'],
-            points=away_data['points'],
-            games_played=away_data['games_played'],
-            wins=away_data['wins'],
-            draws=away_data['draws'],
-            losses=away_data['losses'],
-            goals_for=away_data['goals_for'],
-            goals_against=away_data['goals_against'],
-            goal_difference=away_data['goals_for'] - away_data['goals_against'],
-            goals_per_game=away_data['goals_for'] / max(away_data['games_played'], 1),
-            goals_conceded_per_game=away_data['goals_against'] / max(away_data['games_played'], 1),
-            clean_sheets=away_data.get('clean_sheets', 0),
-            recent_form_wins=away_data.get('recent_wins', 0),
-            recent_form_draws=away_data.get('recent_draws', 0),
-            recent_form_losses=away_data.get('recent_losses', 0),
-            recent_games_count=away_data.get('recent_games', 6)
-        )
-
-        h2h = HeadToHeadRecord(
-            home_team_wins=h2h_data.get('home_wins', 0),
-            away_team_wins=h2h_data.get('away_wins', 0),
-            draws=h2h_data.get('draws', 0),
-            total_games=h2h_data.get('total_games', 0),
-            recent_results=h2h_data.get('recent_results', [])
-        )
-
-        return home_team, away_team, h2h
-
-# Telegram Bot Integration
 import asyncio
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import json
+import logging
+import sqlite3
+import time
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 
-class TelegramFootballBot:
-    def __init__(self, bot_token: str):
-        self.bot_token = bot_token
-        self.predictor = FootballPredictor()
-        self.application = Application.builder().token(bot_token).build()
-        self._setup_handlers()
+import aiohttp
+import requests
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
-    def _setup_handlers(self):
-        """Setup bot command and message handlers"""
-        self.application.add_handler(CommandHandler("start", self.start_command))
-        self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CommandHandler("predict", self.predict_command))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_stats))
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Configuration
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Get from @BotFather
+COINGECKO_API = "https://api.coingecko.com/api/v3"
+DEXSCREENER_API = "https://api.dexscreener.com/latest/dex"
+CHECK_INTERVAL = 300  # 5 minutes
+DATABASE_FILE = "memecoin_alerts.db"
+
+class MemecoinBot:
+    def __init__(self, token: str):
+        self.token = token
+        self.bot = Bot(token=token)
+        self.application = Application.builder().token(token).build()
+        self.init_database()
+        self.volume_history = {}  # Track volume for spike detection
+
+    def init_database(self):
+        """Initialize SQLite database for storing alerts"""
+        conn = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                coin_id TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                target_price REAL,
+                drop_percent REAL,
+                volume_percent REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_triggered TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS volume_history (
+                coin_id TEXT PRIMARY KEY,
+                volume_24h REAL,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        conn.commit()
+        conn.close()
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
-        welcome_message = """
-🏆 **Football Prediction Bot**
+        welcome_msg = """
+🔥 **Ultimate Memecoin Alert Bot** 🚀
 
-Send me team statistics and I'll analyze the match for you!
+I'll help you catch the best memecoin opportunities!
 
-**How to use:**
-1. Paste your team statistics (league table, recent form, head-to-head)
-2. I'll automatically analyze and predict the outcome
-3. Use /predict for manual prediction mode
+**Available Commands:**
+• `/setprice <coin> <price>` - Alert when price drops below target
+• `/setdrop <coin> <percent>` - Alert on percentage drops
+• `/setvolume <coin> <percent>` - Alert on volume spikes
+• `/setsmart <coin> <drop%> <volume%>` - Smart alerts (dip + hype)
+• `/list` - Show your active alerts
+• `/remove <coin>` - Remove alerts for a coin
+• `/clear` - Clear all your alerts
+• `/help` - Show this message
 
-**Commands:**
-/help - Show this help message
-/predict - Manual prediction mode
+**Examples:**
+• `/setprice dogecoin 0.05` - Alert if DOGE < $0.05
+• `/setdrop shiba-inu 15` - Alert if SHIB drops 15%
+• `/setsmart pepe 10 50` - Alert if PEPE drops 10% + volume up 50%
 
-Just paste your stats and let me do the analysis! ⚽
+Ready to catch those pumps! 🚀
         """
-        await update.message.reply_text(welcome_message, parse_mode='Markdown')
+        await update.message.reply_text(welcome_msg, parse_mode='Markdown')
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command"""
-        help_message = """
-📊 **How to use the Football Prediction Bot:**
+        await self.start_command(update, context)
 
-1. **Paste team statistics** - Just send me stats in any format:
-   - League standings
-   - Recent form
-   - Head-to-head records
-   - Goals scored/conceded
+    async def setprice_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /setprice command"""
+        if len(context.args) != 2:
+            await update.message.reply_text(
+                "❌ Usage: `/setprice <coin> <target_price>`\n"
+                "Example: `/setprice dogecoin 0.05`",
+                parse_mode='Markdown'
+            )
+            return
 
-2. **I analyze these factors:**
-   - League positions (15%)
-   - Recent form (25%)
-   - Head-to-head record (20%)
-   - Attack strength (15%)
-   - Defense strength (15%)
-   - Home advantage (10%)
+        coin_id = context.args[0].lower()
+        try:
+            target_price = float(context.args[1])
+        except ValueError:
+            await update.message.reply_text("❌ Price must be a valid number!")
+            return
 
-3. **Get prediction with:**
-   - Match outcome
-   - Predicted score
-   - Confidence level
-   - Detailed reasoning
+        # Verify coin exists
+        if not await self.verify_coin_exists(coin_id):
+            await update.message.reply_text(f"❌ Coin '{coin_id}' not found on CoinGecko!")
+            return
 
-**Example:** Just paste league table and team stats, I'll handle the rest!
-        """
-        await update.message.reply_text(help_message, parse_mode='Markdown')
+        # Save alert
+        self.save_alert(
+            user_id=update.effective_user.id,
+            username=update.effective_user.username,
+            coin_id=coin_id,
+            alert_type="price",
+            target_price=target_price
+        )
 
-    async def predict_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /predict command"""
         await update.message.reply_text(
-            "🔮 **Prediction Mode Active**\n\nSend me the team statistics and I'll analyze the match!",
+            f"✅ Price alert set!\n"
+            f"🪙 **{coin_id.upper()}**\n"
+            f"💰 Target: ${target_price}\n"
+            f"📢 I'll notify you when price drops below this level!",
             parse_mode='Markdown'
         )
 
-    async def handle_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle incoming statistics text"""
-        try:
-            stats_text = update.message.text
-
-            # Check if this looks like football stats
-            if not self._is_football_stats(stats_text):
-                await update.message.reply_text(
-                    "🤔 This doesn't look like football statistics. Please send:\n"
-                    "- League table\n"
-                    "- Team standings\n"
-                    "- Recent form data\n"
-                    "- Head-to-head records"
-                )
-                return
-
-            # Show processing message
-            processing_msg = await update.message.reply_text("⚽ Analyzing match data...")
-
-            # Make prediction
-            prediction = self.predictor.predict_match(stats_text)
-
-            # Format response
-            response = self._format_prediction_response(prediction)
-
-            # Edit the processing message with results
-            await processing_msg.edit_text(response, parse_mode='Markdown')
-
-        except Exception as e:
+    async def setdrop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /setdrop command"""
+        if len(context.args) != 2:
             await update.message.reply_text(
-                f"❌ Error analyzing stats: {str(e)}\n\n"
-                "Please check your data format and try again."
+                "❌ Usage: `/setdrop <coin> <drop_percent>`\n"
+                "Example: `/setdrop shiba-inu 15`",
+                parse_mode='Markdown'
+            )
+            return
+
+        coin_id = context.args[0].lower()
+        try:
+            drop_percent = float(context.args[1])
+        except ValueError:
+            await update.message.reply_text("❌ Drop percentage must be a valid number!")
+            return
+
+        if not await self.verify_coin_exists(coin_id):
+            await update.message.reply_text(f"❌ Coin '{coin_id}' not found on CoinGecko!")
+            return
+
+        self.save_alert(
+            user_id=update.effective_user.id,
+            username=update.effective_user.username,
+            coin_id=coin_id,
+            alert_type="drop",
+            drop_percent=drop_percent
+        )
+
+        await update.message.reply_text(
+            f"✅ Drop alert set!\n"
+            f"🪙 **{coin_id.upper()}**\n"
+            f"📉 Trigger: -{drop_percent}% drop\n"
+            f"📢 I'll notify you when this coin dips!",
+            parse_mode='Markdown'
+        )
+
+    async def setvolume_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /setvolume command"""
+        if len(context.args) != 2:
+            await update.message.reply_text(
+                "❌ Usage: `/setvolume <coin> <volume_spike_percent>`\n"
+                "Example: `/setvolume pepe 50`",
+                parse_mode='Markdown'
+            )
+            return
+
+        coin_id = context.args[0].lower()
+        try:
+            volume_percent = float(context.args[1])
+        except ValueError:
+            await update.message.reply_text("❌ Volume percentage must be a valid number!")
+            return
+
+        if not await self.verify_coin_exists(coin_id):
+            await update.message.reply_text(f"❌ Coin '{coin_id}' not found on CoinGecko!")
+            return
+
+        self.save_alert(
+            user_id=update.effective_user.id,
+            username=update.effective_user.username,
+            coin_id=coin_id,
+            alert_type="volume",
+            volume_percent=volume_percent
+        )
+
+        await update.message.reply_text(
+            f"✅ Volume alert set!\n"
+            f"🪙 **{coin_id.upper()}**\n"
+            f"📊 Trigger: +{volume_percent}% volume spike\n"
+            f"📢 I'll notify you when trading heats up!",
+            parse_mode='Markdown'
+        )
+
+    async def setsmart_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /setsmart command - the ultimate alert!"""
+        if len(context.args) != 3:
+            await update.message.reply_text(
+                "❌ Usage: `/setsmart <coin> <drop_percent> <volume_spike_percent>`\n"
+                "Example: `/setsmart floki 10 40`",
+                parse_mode='Markdown'
+            )
+            return
+
+        coin_id = context.args[0].lower()
+        try:
+            drop_percent = float(context.args[1])
+            volume_percent = float(context.args[2])
+        except ValueError:
+            await update.message.reply_text("❌ Percentages must be valid numbers!")
+            return
+
+        if not await self.verify_coin_exists(coin_id):
+            await update.message.reply_text(f"❌ Coin '{coin_id}' not found on CoinGecko!")
+            return
+
+        self.save_alert(
+            user_id=update.effective_user.id,
+            username=update.effective_user.username,
+            coin_id=coin_id,
+            alert_type="smart",
+            drop_percent=drop_percent,
+            volume_percent=volume_percent
+        )
+
+        await update.message.reply_text(
+            f"🧠 **SMART ALERT SET!** 🚀\n"
+            f"🪙 **{coin_id.upper()}**\n"
+            f"📉 Drop trigger: -{drop_percent}%\n"
+            f"📊 Volume trigger: +{volume_percent}%\n"
+            f"🎯 **Perfect entry signals = dip + hype!**",
+            parse_mode='Markdown'
+        )
+
+    async def list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /list command"""
+        user_id = update.effective_user.id
+        alerts = self.get_user_alerts(user_id)
+
+        if not alerts:
+            await update.message.reply_text("📭 No active alerts set!")
+            return
+
+        message = "📋 **Your Active Alerts:**\n\n"
+        keyboard = []
+
+        for alert in alerts:
+            coin = alert['coin_id'].upper()
+            alert_type = alert['alert_type']
+
+            if alert_type == "price":
+                message += f"💰 **{coin}** - Price < ${alert['target_price']}\n"
+            elif alert_type == "drop":
+                message += f"📉 **{coin}** - Drop > {alert['drop_percent']}%\n"
+            elif alert_type == "volume":
+                message += f"📊 **{coin}** - Volume spike > {alert['volume_percent']}%\n"
+            elif alert_type == "smart":
+                message += f"🧠 **{coin}** - Smart ({alert['drop_percent']}% drop + {alert['volume_percent']}% volume)\n"
+
+            # Add remove button for each alert
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"❌ Remove {coin}",
+                    callback_data=f"remove_{alert['coin_id']}"
+                )
+            ])
+
+        keyboard.append([InlineKeyboardButton("🗑️ Clear All", callback_data="clear_all")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+    async def remove_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /remove command"""
+        if len(context.args) != 1:
+            await update.message.reply_text(
+                "❌ Usage: `/remove <coin>`\n"
+                "Example: `/remove dogecoin`",
+                parse_mode='Markdown'
+            )
+            return
+
+        coin_id = context.args[0].lower()
+        user_id = update.effective_user.id
+
+        if self.remove_user_alert(user_id, coin_id):
+            await update.message.reply_text(
+                f"✅ Removed all alerts for **{coin_id.upper()}**!",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ No alerts found for **{coin_id.upper()}**!",
+                parse_mode='Markdown'
             )
 
-    def _is_football_stats(self, text: str) -> bool:
-        """Check if text contains football statistics"""
-        indicators = [
-            'pts', 'gp', 'goals', 'win', 'draw', 'loss',
-            'standing', 'position', 'matches', 'scored',
-            'millonarios', 'tolima', 'américa', 'nacional'
-        ]
-        text_lower = text.lower()
-        return sum(1 for indicator in indicators if indicator in text_lower) >= 3
+    async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /clear command"""
+        user_id = update.effective_user.id
 
-    def _format_prediction_response(self, prediction: PredictionResult) -> str:
-        """Format prediction result for Telegram"""
+        if self.clear_user_alerts(user_id):
+            await update.message.reply_text("✅ All your alerts have been cleared!")
+        else:
+            await update.message.reply_text("📭 No alerts to clear!")
 
-        outcome_emoji = {
-            MatchOutcome.HOME_WIN: "🏠",
-            MatchOutcome.AWAY_WIN: "✈️",
-            MatchOutcome.DRAW: "🤝"
-        }
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle inline button callbacks"""
+        query = update.callback_query
+        await query.answer()
 
-        outcome_text = {
-            MatchOutcome.HOME_WIN: "Home Win",
-            MatchOutcome.AWAY_WIN: "Away Win", 
-            MatchOutcome.DRAW: "Draw"
-        }
+        user_id = query.from_user.id
+        data = query.data
 
-        confidence_bar = "🟩" * int(prediction.confidence_score * 10) + "⬜" * (10 - int(prediction.confidence_score * 10))
+        if data.startswith("remove_"):
+            coin_id = data.replace("remove_", "")
+            if self.remove_user_alert(user_id, coin_id):
+                await query.edit_message_text(
+                    f"✅ Removed all alerts for **{coin_id.upper()}**!",
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.edit_message_text("❌ Alert not found!")
 
-        response = f"""
-🏆 **MATCH PREDICTION**
+        elif data == "clear_all":
+            if self.clear_user_alerts(user_id):
+                await query.edit_message_text("✅ All your alerts have been cleared!")
+            else:
+                await query.edit_message_text("📭 No alerts to clear!")
 
-{outcome_emoji[prediction.predicted_outcome]} **{outcome_text[prediction.predicted_outcome]}**
-⚽ **Predicted Score:** {prediction.predicted_score}
-📊 **Confidence:** {prediction.confidence_score:.1%}
-{confidence_bar}
+    async def verify_coin_exists(self, coin_id: str) -> bool:
+        """Verify if coin exists on CoinGecko"""
+        try:
+            url = f"{COINGECKO_API}/simple/price"
+            params = {"ids": coin_id, "vs_currencies": "usd"}
 
-**🧠 Analysis:**
-"""
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    data = await response.json()
+                    return coin_id in data
+        except Exception as e:
+            logger.error(f"Error verifying coin {coin_id}: {e}")
+            return False
 
-        for reason in prediction.reasoning:
-            response += f"• {reason}\n"
+    def save_alert(self, user_id: int, username: str, coin_id: str, alert_type: str,
+                   target_price: float = None, drop_percent: float = None,
+                   volume_percent: float = None):
+        """Save alert to database"""
+        conn = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
 
-        response += f"""
-**📈 Key Factors:**
-• Home Advantage: {prediction.key_factors.get('home_total', 0):.2f}
-• Away Strength: {prediction.key_factors.get('away_total', 0):.2f}
-• Score Difference: {prediction.key_factors.get('difference', 0):.3f}
+        # Remove existing alerts for same user and coin
+        cursor.execute(
+            "DELETE FROM alerts WHERE user_id = ? AND coin_id = ?",
+            (user_id, coin_id)
+        )
 
-*Prediction based on systematic analysis of current form, league position, and historical data.*
-        """
+        cursor.execute('''
+            INSERT INTO alerts (user_id, username, coin_id, alert_type, 
+                               target_price, drop_percent, volume_percent)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (user_id, username, coin_id, alert_type, target_price, drop_percent, volume_percent))
 
-        return response
+        conn.commit()
+        conn.close()
 
-    def run(self):
+    def get_user_alerts(self, user_id: int) -> List[Dict]:
+        """Get all alerts for a user"""
+        conn = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT * FROM alerts WHERE user_id = ? AND is_active = 1",
+            (user_id,)
+        )
+
+        columns = [desc[0] for desc in cursor.description]
+        alerts = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        conn.close()
+        return alerts
+
+    def get_all_active_alerts(self) -> List[Dict]:
+        """Get all active alerts"""
+        conn = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM alerts WHERE is_active = 1")
+
+        columns = [desc[0] for desc in cursor.description]
+        alerts = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        conn.close()
+        return alerts
+
+    def remove_user_alert(self, user_id: int, coin_id: str) -> bool:
+        """Remove all alerts for a user and coin"""
+        conn = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "DELETE FROM alerts WHERE user_id = ? AND coin_id = ?",
+            (user_id, coin_id)
+        )
+
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        return rows_affected > 0
+
+    def clear_user_alerts(self, user_id: int) -> bool:
+        """Clear all alerts for a user"""
+        conn = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM alerts WHERE user_id = ?", (user_id,))
+
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        return rows_affected > 0
+
+    def update_alert_triggered(self, alert_id: int):
+        """Update last triggered timestamp"""
+        conn = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "UPDATE alerts SET last_triggered = CURRENT_TIMESTAMP WHERE id = ?",
+            (alert_id,)
+        )
+
+        conn.commit()
+        conn.close()
+
+    def should_skip_alert(self, alert: Dict) -> bool:
+        """Check if alert was recently triggered (cooldown)"""
+        if not alert['last_triggered']:
+            return False
+
+        last_triggered = datetime.fromisoformat(alert['last_triggered'])
+        cooldown_period = timedelta(hours=1)  # 1 hour cooldown
+
+        return datetime.now() - last_triggered < cooldown_period
+
+    def update_volume_history(self, coin_id: str, volume: float):
+        """Update volume history for spike detection"""
+        conn = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            INSERT OR REPLACE INTO volume_history (coin_id, volume_24h)
+            VALUES (?, ?)
+        ''', (coin_id, volume))
+
+        conn.commit()
+        conn.close()
+
+    def get_volume_history(self, coin_id: str) -> Optional[float]:
+        """Get previous volume for comparison"""
+        conn = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT volume_24h FROM volume_history WHERE coin_id = ?",
+            (coin_id,)
+        )
+
+        result = cursor.fetchone()
+        conn.close()
+
+        return result[0] if result else None
+
+    async def fetch_coin_data(self, coin_ids: List[str]) -> Dict:
+        """Fetch coin data from CoinGecko API"""
+        try:
+            coin_ids_str = ",".join(coin_ids)
+            url = f"{COINGECKO_API}/simple/price"
+            params = {
+                "ids": coin_ids_str,
+                "vs_currencies": "usd",
+                "include_24hr_vol": "true",
+                "include_24hr_change": "true"
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(f"CoinGecko API error: {response.status}")
+                        return {}
+        except Exception as e:
+            logger.error(f"Error fetching coin data: {e}")
+            return {}
+
+    async def check_alerts(self):
+        """Main alert checking function"""
+        logger.info("🔍 Checking alerts...")
+
+        alerts = self.get_all_active_alerts()
+        if not alerts:
+            return
+
+        # Get unique coin IDs
+        coin_ids = list(set(alert['coin_id'] for alert in alerts))
+
+        # Fetch current data
+        coin_data = await self.fetch_coin_data(coin_ids)
+
+        for alert in alerts:
+            try:
+                await self.process_alert(alert, coin_data)
+            except Exception as e:
+                logger.error(f"Error processing alert {alert['id']}: {e}")
+
+    async def process_alert(self, alert: Dict, coin_data: Dict):
+        """Process individual alert"""
+        coin_id = alert['coin_id']
+
+        if coin_id not in coin_data:
+            logger.warning(f"No data for coin {coin_id}")
+            return
+
+        if self.should_skip_alert(alert):
+            return
+
+        data = coin_data[coin_id]
+        current_price = data.get('usd', 0)
+        change_24h = data.get('usd_24h_change', 0)
+        volume_24h = data.get('usd_24h_vol', 0)
+
+        # Check volume spike
+        previous_volume = self.get_volume_history(coin_id)
+        volume_spike = 0
+        if previous_volume and previous_volume > 0:
+            volume_spike = ((volume_24h - previous_volume) / previous_volume) * 100
+
+        # Update volume history
+        self.update_volume_history(coin_id, volume_24h)
+
+        # Check alert conditions
+        should_alert = False
+        alert_message = ""
+
+        if alert['alert_type'] == 'price' and current_price <= alert['target_price']:
+            should_alert = True
+            alert_message = f"💰 **PRICE ALERT: {coin_id.upper()}**\n"
+
+        elif alert['alert_type'] == 'drop' and change_24h <= -abs(alert['drop_percent']):
+            should_alert = True
+            alert_message = f"📉 **DIP ALERT: {coin_id.upper()}**\n"
+
+        elif alert['alert_type'] == 'volume' and volume_spike >= alert['volume_percent']:
+            should_alert = True
+            alert_message = f"📊 **VOLUME SPIKE: {coin_id.upper()}**\n"
+
+        elif alert['alert_type'] == 'smart':
+            drop_triggered = change_24h <= -abs(alert['drop_percent'])
+            volume_triggered = volume_spike >= alert['volume_percent']
+
+            if drop_triggered and volume_triggered:
+                should_alert = True
+                alert_message = f"🧠 **SMART SIGNAL: {coin_id.upper()}** 🚀\n"
+
+        if should_alert:
+            # Build complete alert message
+            alert_message += f"• **Current Price:** ${current_price:.8f}\n"
+            alert_message += f"• **24h Change:** {change_24h:+.2f}%\n"
+            alert_message += f"• **24h Volume:** ${volume_24h:,.0f}\n"
+
+            if volume_spike > 0:
+                alert_message += f"• **Volume Spike:** +{volume_spike:.1f}%\n"
+
+            if alert['alert_type'] == 'smart':
+                alert_message += f"\n🎯 **Perfect Entry Signal!** (Dip + Hype)\n"
+
+            alert_message += f"⏰ {datetime.now().strftime('%H:%M:%S UTC')}"
+
+            # Send alert
+            try:
+                await self.bot.send_message(
+                    chat_id=alert['user_id'],
+                    text=alert_message,
+                    parse_mode='Markdown'
+                )
+
+                # Update last triggered
+                self.update_alert_triggered(alert['id'])
+                logger.info(f"✅ Alert sent to user {alert['user_id']} for {coin_id}")
+
+            except Exception as e:
+                logger.error(f"Failed to send alert to user {alert['user_id']}: {e}")
+
+    async def monitoring_loop(self):
+        """Main monitoring loop"""
+        while True:
+            try:
+                await self.check_alerts()
+                await asyncio.sleep(CHECK_INTERVAL)
+            except Exception as e:
+                logger.error(f"Error in monitoring loop: {e}")
+                await asyncio.sleep(60)  # Wait 1 minute on error
+
+    def setup_handlers(self):
+        """Setup command handlers"""
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("setprice", self.setprice_command))
+        self.application.add_handler(CommandHandler("setdrop", self.setdrop_command))
+        self.application.add_handler(CommandHandler("setvolume", self.setvolume_command))
+        self.application.add_handler(CommandHandler("setsmart", self.setsmart_command))
+        self.application.add_handler(CommandHandler("list", self.list_command))
+        self.application.add_handler(CommandHandler("remove", self.remove_command))
+        self.application.add_handler(CommandHandler("clear", self.clear_command))
+        self.application.add_handler(CallbackQueryHandler(self.button_callback))
+
+    async def run(self):
         """Start the bot"""
-        print("🤖 Football Prediction Bot starting...")
-        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+        self.setup_handlers()
 
-# Main execution
+        # Start monitoring loop
+        monitoring_task = asyncio.create_task(self.monitoring_loop())
+
+        # Start bot
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling()
+
+        logger.info("🤖 Memecoin Alert Bot is running!")
+        logger.info(f"📊 Checking alerts every {CHECK_INTERVAL} seconds")
+
+        try:
+            await monitoring_task
+        except KeyboardInterrupt:
+            logger.info("🛑 Stopping bot...")
+        finally:
+            await self.application.stop()
+
+
+async def main():
+    """Main function"""
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("❌ Please set your bot token!")
+        print("1. Create a bot with @BotFather on Telegram")
+        print("2. Replace 'YOUR_BOT_TOKEN_HERE' with your actual token")
+        return
+
+    bot = MemecoinBot(BOT_TOKEN)
+    await bot.run()
+
+
 if __name__ == "__main__":
-    # Configuration
-    BOT_TOKEN = "8186199634:AAEEafBIm5GhZrhrWt-je8wa1UESaTHF9ZM"
-
-    # For testing without Telegram (you can test the predictor directly)
-    def test_predictor():
-        predictor = FootballPredictor()
-
-        # Your sample data
-        sample_stats = """
-STANDINGS UP TO 18/08/2025
-CLAUSURA	PTS	GP	W	D	L	GF	GA	+/-
-1	América de Cali	39	20	11	6	3	29	12	17
-2	Millonarios	38	20	11	5	4	30	17	13
-3	Junior Barranquilla	37	20	10	7	3	26	16	10
-4	Deportes Tolima	36	20	10	6	4	30	19	11
-
-Deportes Tolima 2
-33%
-Draw 1
-17%
-Millonarios 3
-50%
-
-Win 3
-50%
-Draw 1
-17%
-Lost 2
-33%
-
-Win 1
-17%
-Draw 1
-17%
-Lost 4
-67%
-        """
-
-        result = predictor.predict_match(sample_stats)
-        print(f"Prediction: {result.predicted_outcome.value}")
-        print(f"Score: {result.predicted_score}")
-        print(f"Confidence: {result.confidence_score:.1%}")
-        print("Reasoning:")
-        for reason in result.reasoning:
-            print(f"  - {reason}")
-
-    # Uncomment to test without Telegram
-    # test_predictor()
-
-    # Start the Telegram bot
-    bot = TelegramFootballBot(BOT_TOKEN)
-    bot.run()
-
-# Installation requirements for Replit:
-"""
-Add to requirements.txt:
-python-telegram-bot==20.7
-aiohttp
-asyncio
-"""
-
-# Replit setup instructions:
-"""
-1. Create new Python repl on Replit
-2. Copy this code to main.py
-3. Add requirements.txt with the dependencies above
-4. Get Telegram bot token from @BotFather
-5. Replace BOT_TOKEN with your actual token
-6. Uncomment the bot.run() line
-7. Click Run!
-
-Environment variables (optional, more secure):
-Add to Secrets tab in Replit:
-- Key: BOT_TOKEN
-- Value: your_actual_bot_token
-
-Then use: BOT_TOKEN = os.environ.get('BOT_TOKEN')
-"""
+    asyncio.run(main())

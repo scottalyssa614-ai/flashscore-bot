@@ -1,0 +1,22 @@
+{
+  "7565367210": {
+    "goat": {
+      "type": "price",
+      "target_price": 1.11,
+      "created_at": "2025-08-27T17:03:46.730289",
+      "triggered": false
+    },
+    "hsbfigaxhfgzi": {
+      "type": "price",
+      "target_price": 1.11,
+      "created_at": "2025-08-27T17:04:17.329813",
+      "triggered": false
+    },
+    "asjhkas.mkdls.afbeamwotklsjthbgawoeafjla\u201efwairu#r": {
+      "type": "price",
+      "target_price": 1.11,
+      "created_at": "2025-08-27T17:04:38.681086",
+      "triggered": false
+    }
+  }
+}
