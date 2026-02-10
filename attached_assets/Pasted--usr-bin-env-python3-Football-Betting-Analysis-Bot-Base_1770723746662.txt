@@ -67,7 +67,7 @@ def calculate_value_probability(expected_total: float) -> Tuple[float, float]:
 
     return round(prob_over, 3), round(prob_under, 3)
 
-def find_value_bet(expected_total: float, odds_over: float = 0.0, odds_under: float = 0.0) -> Dict:
+def find_value_bet(expected_total: float, odds_over: float = None, odds_under: float = None) -> Dict:
     """
     Determine if a bet offers value based on paper's strategy
     Returns recommendation dictionary
@@ -85,7 +85,7 @@ def find_value_bet(expected_total: float, odds_over: float = 0.0, odds_under: fl
     }
 
     # If odds provided, calculate exact value
-    if odds_over > 0 and odds_under > 0:
+    if odds_over and odds_under:
         implied_over = 1 / odds_over
         implied_under = 1 / odds_under
 
@@ -385,15 +385,11 @@ def webhook():
         text = message.get('text', '').strip()
         chat_id = message.get('chat', {}).get('id')
 
-        logger.info(f"Processing message: '{text}' from chat_id: {chat_id}")
-
         if not text or not chat_id:
-            logger.warning(f"Invalid request data: text='{text}', chat_id='{chat_id}'")
             return jsonify({"status": "error", "message": "Invalid request"}), 400
 
         # Process command
         response_text = process_command(text)
-        logger.info(f"Command response: {response_text[:100]}...")
 
         # Prepare response for Telegram
         response = {
