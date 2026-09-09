@@ -1,0 +1,274 @@
+{
+  "argentina": {
+    "display_name": "Argentina",
+    "Ha": 20.5149925,
+    "Hd": 17.9970015,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "egypt": {
+    "display_name": "Egypt",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.9970015,
+    "Ad": 20.5149925,
+    "matches": 1
+  },
+  "switzerland": {
+    "display_name": "Switzerland",
+    "Ha": 20.43853075,
+    "Hd": 17.946027000000004,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "colombia": {
+    "display_name": "Colombia",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.946027000000004,
+    "Ad": 20.43853075,
+    "matches": 1
+  },
+  "araratarmenia": {
+    "display_name": "Ararat-Armenia",
+    "Ha": 20.48950525,
+    "Hd": 17.946027000000004,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "riga": {
+    "display_name": "Riga FC",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.946027000000004,
+    "Ad": 20.48950525,
+    "matches": 1
+  },
+  "kaunozalgiris": {
+    "display_name": "Kauno Zalgiris",
+    "Ha": 20.464018,
+    "Hd": 17.971514250000002,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "dritagjilan": {
+    "display_name": "Drita Gjilan",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.971514250000002,
+    "Ad": 20.464018,
+    "matches": 1
+  },
+  "lincolnredimps": {
+    "display_name": "Lincoln Red Imps",
+    "Ha": 20.5149925,
+    "Hd": 17.971514250000002,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "interdescaldes": {
+    "display_name": "Inter D'Escaldes",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.971514250000002,
+    "Ad": 20.5149925,
+    "matches": 1
+  },
+  "sabah": {
+    "display_name": "Sabah FK",
+    "Ha": 20.48950525,
+    "Hd": 17.946027000000004,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "thenewsaints": {
+    "display_name": "The New Saints",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.946027000000004,
+    "Ad": 20.48950525,
+    "matches": 1
+  },
+  "vardar": {
+    "display_name": "Vardar",
+    "Ha": 20.43853075,
+    "Hd": 17.9970015,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "kupskuopio": {
+    "display_name": "KuPS Kuopio",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.9970015,
+    "Ad": 20.43853075,
+    "matches": 1
+  },
+  "floriana": {
+    "display_name": "Floriana FC",
+    "Ha": 20.48950525,
+    "Hd": 17.946027000000004,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "shamrockrovers": {
+    "display_name": "Shamrock Rovers",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.946027000000004,
+    "Ad": 20.48950525,
+    "matches": 1
+  },
+  "boracbanjaluka": {
+    "display_name": "Borac Banja Luka",
+    "Ha": 20.464018,
+    "Hd": 17.971514250000002,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "levskisofia": {
+    "display_name": "Levski Sofia",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.971514250000002,
+    "Ad": 20.464018,
+    "matches": 1
+  },
+  "trefiori": {
+    "display_name": "Tre Fiori",
+    "Ha": 20.43853075,
+    "Hd": 17.971514250000002,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "larne": {
+    "display_name": "Larne",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.971514250000002,
+    "Ad": 20.43853075,
+    "matches": 1
+  },
+  "kiklaksvik": {
+    "display_name": "KI Klaksvik",
+    "Ha": 20.48950525,
+    "Hd": 17.971514250000002,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "atertbissen": {
+    "display_name": "FC Atert Bissen",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.971514250000002,
+    "Ad": 20.48950525,
+    "matches": 1
+  },
+  "vikingurreykjavik": {
+    "display_name": "Vikingur Reykjavik",
+    "Ha": 20.464018,
+    "Hd": 17.946027000000004,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "gyorieto": {
+    "display_name": "Gy\u00f6ri ETO FC",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.946027000000004,
+    "Ad": 20.464018,
+    "matches": 1
+  },
+  "unastrassen": {
+    "display_name": "UNA Strassen",
+    "Ha": 20.464018,
+    "Hd": 17.946027000000004,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "fiorita": {
+    "display_name": "Fiorita",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.946027000000004,
+    "Ad": 20.464018,
+    "matches": 1
+  },
+  "afelbasani": {
+    "display_name": "AF Elbasani",
+    "Ha": 20.464018,
+    "Hd": 17.971514250000002,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "bateborisov": {
+    "display_name": "BATE Borisov",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.971514250000002,
+    "Ad": 20.464018,
+    "matches": 1
+  },
+  "athletic": {
+    "display_name": "Athletic",
+    "Ha": 20.43853075,
+    "Hd": 17.971514250000002,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "operariopr": {
+    "display_name": "Oper\u00e1rio PR",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.971514250000002,
+    "Ad": 20.43853075,
+    "matches": 1
+  },
+  "aucas": {
+    "display_name": "Aucas",
+    "Ha": 20.464018,
+    "Hd": 17.946027000000004,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "guayaquil": {
+    "display_name": "Guayaquil City FC",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.946027000000004,
+    "Ad": 20.464018,
+    "matches": 1
+  },
+  "gvsanjose": {
+    "display_name": "GV San Jos\u00e9",
+    "Ha": 20.5149925,
+    "Hd": 17.9970015,
+    "Aa": 18.0,
+    "Ad": 20.5,
+    "matches": 1
+  },
+  "tomayapo": {
+    "display_name": "Real Tomayapo",
+    "Ha": 20.5,
+    "Hd": 18.0,
+    "Aa": 17.9970015,
+    "Ad": 20.5149925,
+    "matches": 1
+  }
+}
