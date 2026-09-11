@@ -13,7 +13,12 @@ That is just so Telegram tells the bot your chat id. It gets saved, and from
 then on the bot starts scanning by itself. You never need to send anything
 again.
 
-No /commands exist. There is nothing to control.
+The only two commands that exist:
+
+    /stop     pause scanning
+    /start    resume scanning
+
+That is all. Everything else happens by itself.
 
 WHAT YOU SEE
 ------------
@@ -399,12 +404,28 @@ class Telegram:
             return None
 
     def edit(self, cid: int, msg_id: int, text: str) -> bool:
+        """Edit a message.
+
+        Telegram answers HTTP 200 with {"ok": false} when it could not edit --
+        "message is not modified" (fine, already showing this) or "message to
+        edit not found" / too old (NOT fine: we must re-send). Treating every
+        200 as success is how the dashboard silently froze.
+        """
         try:
             r = requests.post(self.edit_url, timeout=self.timeout,
                               data={"chat_id": cid, "message_id": msg_id,
                                     "text": text, "parse_mode": "HTML",
                                     "disable_web_page_preview": True})
-            return bool(r.status_code == 200)
+            if r.status_code != 200:
+                return False
+            j = r.json()
+            if j.get("ok"):
+                return True
+            desc = str(j.get("description") or "").lower()
+            if "not modified" in desc:
+                return True          # already displaying exactly this text
+            log.debug("edit rejected: %s", j.get("description"))
+            return False             # stale or gone -> caller re-sends
         except Exception as e:                                # noqa: BLE001
             log.debug("edit failed: %s", e)
             return False
@@ -439,7 +460,7 @@ def _bar(done: int, total: int) -> str:
 
 
 def dash(now_team: str, done: int, total: int, sweeps: int, uptime: float,
-         judged: int, firing: int, alerts: int, goals: int,
+         judged: int, firing: int, alerts: int,
          closest: Optional[State], phase: str) -> str:
     h = int(uptime // 3600)
     m = int((uptime % 3600) // 60)
@@ -451,14 +472,17 @@ def dash(now_team: str, done: int, total: int, sweeps: int, uptime: float,
          ""]
     if judged or firing or alerts:
         L.append(f"judged <b>{judged}</b>  \u00b7  firing <b>{firing}</b>"
-                 f"  \u00b7  alerts <b>{alerts}</b>  \u00b7  goals {goals}")
+                 f"  \u00b7  alerts <b>{alerts}</b>")
     if closest is not None:
         L.append(f"closest: {esc(closest.home)} vs {esc(closest.away)}  "
                  f"{closest.edge_vig:+.1%}")
     else:
         L.append("nothing close yet")
     L.append("")
-    L.append("<i>quiet = no edge found, still scanning</i>")
+    if phase == "STOPPED":
+        L.append("<i>paused \u2014 send /start to resume</i>")
+    else:
+        L.append("<i>quiet = no edge found, still scanning</i>")
     return "\n".join(L)
 
 
@@ -501,10 +525,10 @@ class Scanner:
         self.cid: Optional[int] = None
         self.msg_id: Optional[int] = None
         self.recent: Dict[str, float] = {}
-        self.prev_score: Dict[str, Tuple[int, int]] = {}
         self._last_edit = 0.0
         self.stop = threading.Event()
-        self.st = {"sweeps": 0, "alerts": 0, "goals": 0, "live": 0,
+        self.paused = False
+        self.st = {"sweeps": 0, "alerts": 0, "live": 0,
                    "judged": 0, "firing": 0, "error": "", "started": 0.0}
 
     # -- persistence -------------------------------------------------------- #
@@ -544,18 +568,20 @@ class Scanner:
             self.save()
 
     def say(self, text: str) -> None:
+        """One-off message. Deliberately does NOT touch the dashboard id."""
         if self.cid is not None:
-            self.tg.send(self.cid, text)
+            if not self.tg.send(self.cid, text):
+                log.warning("could not send message to %s", self.cid)
         else:
             print(text)
 
     # -- first contact ------------------------------------------------------- #
 
     def wait_for_chat(self) -> None:
-        """Block until the user sends literally anything, then remember them."""
+        """Block until the user sends anything at all, then remember them."""
         print("waiting for your first message in telegram "
               "(send the bot anything)...", flush=True)
-        while not self.stop.is_set():
+        while not self.stop.is_set() and self.cid is None:
             for u in self.tg.updates(10):
                 msg = u.get("message") or {}
                 chat = msg.get("chat") or {}
@@ -563,16 +589,78 @@ class Scanner:
                     self.cid = chat["id"]
                     self.save()
                     self.say("\U0001F7E2 <b>connected</b> \u2014 scanning now.\n\n"
-                             "You never need to message me again. This message "
-                             "updates itself as I work.")
+                             "This message updates itself as I work.\n"
+                             "Only commands: <code>/stop</code> and "
+                             "<code>/start</code>")
                     return
+            time.sleep(1)
+
+    # -- the only two commands --------------------------------------------- #
+
+    def _on_command(self, text: str) -> None:
+        cmd = ""
+        if text:
+            cmd = text.split()[0].split("@")[0].lower()
+        if cmd == "/stop":
+            if self.paused:
+                self.say("already stopped \u2014 /start to resume")
+                return
+            self.paused = True
+            uptime = time.time() - self.st["started"] if self.st["started"] else 0
+            self.push_dash(dash("stopped", 0, 0, self.st["sweeps"], uptime,
+                                self.st["judged"], self.st["firing"],
+                                self.st["alerts"], None, "STOPPED"),
+                           force=True)
+            self.say("\u23F8 <b>stopped</b> \u2014 no more scanning.\n"
+                     "<code>/start</code> to resume.")
+        elif cmd in ("/start", "/resume", "/go"):
+            if not self.paused:
+                self.say("already scanning")
+                return
+            self.paused = False
+            # drop the old dashboard id so the next push sends a FRESH
+            # message at the bottom of the chat -- an edited message stays
+            # where it was, and after a long pause it is scrolled far away
+            self.msg_id = None
+            self.say("\u25B6 <b>scanning again</b>")
+        elif cmd:
+            self.say("Only two commands: <code>/stop</code> and "
+                     "<code>/start</code>")
+
+    def _poll(self) -> None:
+        """Background listener for /stop and /start."""
+        while not self.stop.is_set():
+            try:
+                for u in self.tg.updates(5):
+                    msg = u.get("message") or {}
+                    chat = msg.get("chat") or {}
+                    cid = chat.get("id")
+                    if not cid:
+                        continue
+                    if self.cid is None:
+                        self.cid = cid
+                        self.save()
+                        self.say("\U0001F7E2 <b>connected</b> \u2014 scanning "
+                                 "now.\n\nOnly commands: <code>/stop</code> "
+                                 "and <code>/start</code>")
+                        continue
+                    self._on_command((msg.get("text") or "").strip())
+            except Exception as e:                            # noqa: BLE001
+                log.debug("poll: %s", e)
             time.sleep(1)
 
     # -- the loop ------------------------------------------------------------ #
 
     def loop(self) -> None:
-        self.st["started"] = time.time()
+        if not self.st["started"]:
+            self.st["started"] = time.time()
         while not self.stop.is_set():
+            if self.paused:
+                self.stop.wait(2)
+                continue
+            if self.cid is None:
+                self.stop.wait(2)
+                continue
             try:
                 self.sweep_once()
             except Exception as e:                            # noqa: BLE001
@@ -582,7 +670,7 @@ class Scanner:
                     self.push_dash(dash(self.st["error"], 0, 0,
                                         self.st["sweeps"],
                                         time.time() - self.st["started"],
-                                        0, 0, self.st["alerts"], 0,
+                                        0, 0, self.st["alerts"],
                                         None, "error \u2014 retrying"),
                                    force=True)
                 except Exception:                             # noqa: BLE001
@@ -612,23 +700,11 @@ class Scanner:
             self.st["judged"] = len(judged)
             self.st["firing"] = len(firing)
 
-            # goals in matches we are already tracking
-            prev = self.prev_score.get(s.mid)
-            if not s.skip and prev is not None and prev != s.score:
-                self.st["goals"] += 1
-                who = s.home if s.score[0] > prev[0] else s.away
-                self.say(f"\u26BD <b>GOAL</b> {esc(who)}\n{esc(s.home)} "
-                         f"{s.score[0]}-{s.score[1]} {esc(s.away)}"
-                         f"   (min &gt;= {s.minute:.0f}')")
-            if not s.skip:
-                self.prev_score[s.mid] = s.score
-
             near = sorted((x for x in judged if x.price),
                           key=lambda x: -x.edge_vig)
             self.push_dash(dash(f"{s.home} vs {s.away}", i, total,
                                 self.st["sweeps"], uptime, len(judged),
                                 len(firing), self.st["alerts"],
-                                self.st["goals"],
                                 near[0] if near else None, "scanning"))
 
         # fire the alerts
@@ -646,7 +722,7 @@ class Scanner:
                       key=lambda x: -x.edge_vig)
         self.push_dash(dash("idle \u2014 waiting for next sweep", total, total,
                             self.st["sweeps"], uptime, len(judged),
-                            len(firing), self.st["alerts"], self.st["goals"],
+                            len(firing), self.st["alerts"],
                             near[0] if near else None, "watching"),
                        force=True)
 
@@ -662,11 +738,14 @@ class Scanner:
             log.warning("ledger: %s", e)
 
     def run(self) -> None:
+        threading.Thread(target=self._poll, daemon=True,
+                         name="cmds").start()
         if not self.load() or self.cid is None:
             self.wait_for_chat()
         if self.cid is None:
             return
-        print(f"chat {self.cid} \u2014 scanning", flush=True)
+        print(f"chat {self.cid} \u2014 scanning  "
+              f"(/stop to pause, /start to resume)", flush=True)
         self.loop()
 
 

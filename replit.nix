@@ -1,5 +1,6 @@
 { pkgs }: {
   deps = [
+    pkgs.gut
     pkgs.python311Full
 
     # Browser runtime deps
