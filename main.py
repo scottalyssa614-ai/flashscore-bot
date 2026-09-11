@@ -106,7 +106,13 @@ PRIOR_XG90 = 1.35
 MAX_GOALS  = 8
 
 ALERT_COOLDOWN = 1800.0   # same match+side is not re-pinged for 30 min
-DASH_MIN_GAP   = 0.9      # seconds between dashboard edits (telegram limits)
+
+# Telegram flood limits are the whole reason this is 10s and not sub-second.
+# Editing on EVERY match (99 matches/sweep) tripped 429, the re-send then hit
+# the per-chat flood limit too, and the dashboard froze silently. One update
+# every 10s is ~12 per sweep: visibly alive, nowhere near the limit.
+DASH_MIN_GAP   = 6.0      # seconds between dashboard updates (~16 per sweep)
+DASH_BACKOFF   = 30.0     # pause after a failed dashboard push
 SWEEP_GAP      = 5.0      # seconds between full sweeps
 
 
@@ -397,38 +403,51 @@ class Telegram:
                               data={"chat_id": cid, "text": text,
                                     "parse_mode": "HTML",
                                     "disable_web_page_preview": True})
+            if r.status_code == 429:
+                log.warning("send 429 -- rate limited, backing off")
+                time.sleep(5)
+                return None
             j = r.json() if r.status_code == 200 else {}
             return (j.get("result") or {}).get("message_id")
         except Exception as e:                                # noqa: BLE001
             log.warning("send failed: %s", e)
             return None
 
-    def edit(self, cid: int, msg_id: int, text: str) -> bool:
-        """Edit a message.
+    def edit(self, cid: int, msg_id: int, text: str) -> Tuple[bool, float]:
+        """Edit a message -> (ok, retry_after_seconds).
 
-        Telegram answers HTTP 200 with {"ok": false} when it could not edit --
-        "message is not modified" (fine, already showing this) or "message to
-        edit not found" / too old (NOT fine: we must re-send). Treating every
-        200 as success is how the dashboard silently froze.
+        Telegram answers HTTP 200 with {"ok": false} when it could not edit:
+        "message is not modified" (fine -- already showing this text), 429 with
+        retry_after (back off), or "message to edit not found" (stale -- we
+        must re-send). Treating every 200 as success is how the dashboard
+        silently froze.
         """
         try:
             r = requests.post(self.edit_url, timeout=self.timeout,
                               data={"chat_id": cid, "message_id": msg_id,
                                     "text": text, "parse_mode": "HTML",
                                     "disable_web_page_preview": True})
+            if r.status_code == 429:
+                try:
+                    wait = float(((r.json().get("parameters") or {})
+                                  .get("retry_after")) or 5.0)
+                except Exception:                             # noqa: BLE001
+                    wait = 5.0
+                log.debug("edit 429 -- backing off %.0fs", wait)
+                return False, wait
             if r.status_code != 200:
-                return False
+                return False, 0.0
             j = r.json()
             if j.get("ok"):
-                return True
+                return True, 0.0
             desc = str(j.get("description") or "").lower()
             if "not modified" in desc:
-                return True          # already displaying exactly this text
+                return True, 0.0     # already displaying exactly this text
             log.debug("edit rejected: %s", j.get("description"))
-            return False             # stale or gone -> caller re-sends
+            return False, 0.0        # stale or gone -> caller re-sends
         except Exception as e:                                # noqa: BLE001
             log.debug("edit failed: %s", e)
-            return False
+            return False, 0.0
 
     def updates(self, timeout: int = 20) -> List[dict]:
         try:
@@ -459,12 +478,16 @@ def _bar(done: int, total: int) -> str:
     return "\u2588" * filled + "\u2591" * (BAR_LEN - filled)
 
 
+SPIN = ("\u25D0", "\u25D3", "\u25D1", "\u25D2")
+
+
 def dash(now_team: str, done: int, total: int, sweeps: int, uptime: float,
          judged: int, firing: int, alerts: int,
          closest: Optional[State], phase: str) -> str:
     h = int(uptime // 3600)
     m = int((uptime % 3600) // 60)
-    L = ["\U0001F534 <b>LIVE SCANNER</b>  \u2022  " + esc(phase),
+    blink = SPIN[int(time.time()) % len(SPIN)]
+    L = ["\U0001F534 <b>LIVE SCANNER</b>  " + blink + "  " + esc(phase),
          f"sweep {sweeps}  \u00b7  uptime {h}h {m}m",
          "",
          f"<code>{_bar(done, total)}</code> {done}/{total}",
@@ -526,6 +549,7 @@ class Scanner:
         self.msg_id: Optional[int] = None
         self.recent: Dict[str, float] = {}
         self._last_edit = 0.0
+        self._blocked_until = 0.0
         self.stop = threading.Event()
         self.paused = False
         self.st = {"sweeps": 0, "alerts": 0, "live": 0,
@@ -555,17 +579,28 @@ class Scanner:
         if self.cid is None:
             return
         now = time.time()
+        if now < self._blocked_until:
+            return                              # serving out a 429 backoff
         if not force and now - self._last_edit < DASH_MIN_GAP:
             return
         self._last_edit = now
         if self.msg_id:
-            if self.tg.edit(self.cid, self.msg_id, text):
+            ok, wait = self.tg.edit(self.cid, self.msg_id, text)
+            if ok:
                 return
-            self.msg_id = None
+            if wait > 0:                        # 429: back off, keep the id
+                self._blocked_until = time.time() + wait
+                return
+            self.msg_id = None                  # stale: re-anchor below
         mid = self.tg.send(self.cid, text)
         if mid:
             self.msg_id = mid
             self.save()
+        else:
+            # could not even send -- stop hammering and try again later
+            self._blocked_until = time.time() + DASH_BACKOFF
+            log.warning("dashboard send failed; backing off %.0fs",
+                        DASH_BACKOFF)
 
     def say(self, text: str) -> None:
         """One-off message. Deliberately does NOT touch the dashboard id."""
