@@ -1,920 +1,1383 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-live_bot.py -- 24/7 live scanner. No commands. You never type anything.
+Flashscore Daily Pattern Filter — Telegram Bot
+==============================================
 
-WHAT YOU DO
------------
-    pip install requests
-    export TELEGRAM_BOT_TOKEN=123456:ABC...
-    python live_bot.py
+A long-running Telegram bot. It polls Telegram for your messages, and when you
+send it a date in the form  dd-mm-yyyy  it scrapes Flashscore for every football
+match scheduled that day, pulls the league table for each match, and replies in
+the same chat with the matches that fit the N pattern below.
 
-First run only: open Telegram and send your bot ANY message (even "hi").
-That is just so Telegram tells the bot your chat id. It gets saved, and from
-then on the bot starts scanning by itself. You never need to send anything
-again.
+For every N from N_MIN to N_MAX (currently 1 to 40) a match counts when, for
+that same N:
 
-The only two commands that exist:
+    1. BOTH teams have played exactly N league games this season.
+    2. The absolute points gap between the two teams is exactly N.
+    3. Home GF + Home GA + Away GF + Away GA >= 2 * N.
 
-    /stop     pause scanning
-    /start    resume scanning
+So N=3 means 3 games each, a 3-point gap and at least 6 combined goals; N=40
+means 40 games each, a 40-point gap and at least 80 combined goals. Fixtures and
+tables are fetched once per date, then every match is offered to all of the
+variants -- and since games played is a single number, a match can only ever
+satisfy one of them. Results come back grouped by the N that matched; N values
+with no hits are left out entirely. Matches whose league table cannot be found
+are counted in the summary line but not listed.
 
-That is all. Everything else happens by itself.
+Running it
+----------
+Just start it. There are no required flags — the date comes in via Telegram.
 
-WHAT YOU SEE
-------------
-One message that keeps rewriting itself, match by match:
+    python filter_bot.py
 
-    LIVE SCANNER  * running
-    sweep 4  *  uptime 0h 12m
+On Replit, that is what the Run button does (see .replit). After it starts you
+never need the shell again: message the bot a date and it answers.
 
-    now scanning 23/75
-    > Skenderbeu vs Kukesi
+Talking to it
+-------------
+    15-09-2026      -> scans that date and replies with the report, grouped by N
+    15-09-2026 16-09-2026
+                    -> scans both, one report each
+    /help or help   -> usage
+    anything else   -> a short "send me dd-mm-yyyy" reply (it never goes silent)
 
-    judged 3  *  firing 0  *  alerts 0
-    closest: Van vs BKMA  edge +3.1%
+Telegram setup (once)
+---------------------
+1. Message @BotFather on Telegram -> /newbot -> follow the prompts.
+   Copy the token it gives you (looks like "123456789:AAE...xyz").
+2. Get your numeric chat_id: message @userinfobot, or send your new bot any
+   message and open  https://api.telegram.org/bot<TOKEN>/getUpdates
+   and read "chat":{"id": ...}. For a group, add the bot to the group and use
+   the negative group id. (You only need chat_id if you set --restrict-chat-id;
+   by default the bot answers anyone who messages it.)
+3. Provide the token as an environment variable (on Replit: the Secrets tool):
+       TELEGRAM_BOT_TOKEN=123456789:AAE...xyz
+   or in a file called telegram_config.json next to this script:
+       {"bot_token": "123456789:AAE...xyz", "chat_id": "987654321"}
+   The --token / --chat-id flags override both.
 
-And when it finds something, a separate message that stays:
+Flashscore limitation (theirs, not this script's)
+-------------------------------------------------
+Flashscore's daily fixture feed is a rolling window of TODAY +/- 7 DAYS. Outside
+that window it returns an empty response, so there is nothing to filter; the bot
+replies and says so plainly. League tables are always the *current* table —
+Flashscore serves no historical standings — so scanning a past date compares
+that day's fixtures against today's table.
 
-    BET NOW
-    Skenderbeu vs Kukesi  (min 67')  score 0-1
-    BET: Skenderbeu to win @ 2.10
-    safer: Draw No Bet ~1.62
-    why: dominating but behind -- xG 71%, shots on target +4
-    model 58% vs market 41%  *  edge +12%
-
-WHEN IT IS QUIET
-----------------
-Quiet means no edge found. It is still scanning. Watch the dashboard -- the
-"now scanning" line keeps moving, which is how you know it is alive.
-
-REQUIREMENT: Python 3.9+ and `requests`. Nothing else.
+Optional flags: --token, --chat-id, --restrict-chat-id, --timezone,
+--include-started, --delay, --poll-timeout, --port, --no-http, --once
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
+import datetime as _dt
 import html
 import json
-import logging
-import math
 import os
+import queue
 import re
-import signal
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-try:
-    import requests
-except ImportError:                                          # noqa: BLE001
-    sys.exit("missing dependency: requests\n\n    pip install requests\n")
-
-if sys.version_info < (3, 9):
-    sys.exit("live_bot needs Python 3.9 or newer\n")
-
-log = logging.getLogger("live")
+import requests
 
 # --------------------------------------------------------------------------- #
-# Config                                                                       #
+# Configuration
 # --------------------------------------------------------------------------- #
 
-FSIGN = "SW9D1eZo"
-FEED_BASE = "https://www.flashscore.com/x/feed"
-GQL_ODDS = "https://global.ds.lsapp.eu/odds/pq_graphql"
-PROJECT_ID = "2"
+BASE_URL = "https://www.flashscore.com"
+FEED_URL = BASE_URL + "/x/feed/"
 
-CHAT_FILE = "live_chat.json"     # remembers your chat + the dashboard message
-LEDGER = "live_ledger.jsonl"     # every alert, for /settle-style scoring
+# Static signature Flashscore's own frontend sends with every feed request.
+FEED_SIGNATURE = "SW9D1eZo"
+PROJECT_TYPE_ID = 2          # flashscore.com
+SPORT_ID_FOOTBALL = 1
+LANGUAGE = "en"
+TIMEZONE_SHIFT = 0           # 0 = day boundaries at UTC midnight
 
-# The trigger. Each gate exists because a specific failure was measured.
-MIN_EDGE_VIG = 0.05     # must beat the in-play overround by this much
-MIN_LEFT_MIN = 12.0     # need time for pressure to convert
-MAX_ODDS     = 3.00     # no flyers
-MIN_MODEL_P  = 0.40     # no longshots dressed up as edge
-XG_SHARE_MIN = 0.62     # dominant side owns this much of the xG
-SOT_EDGE_MIN = 3        # ... and leads shots on target by this much
+# Day-feed window Flashscore actually serves (verified: -8 / +8 return "0").
+MAX_DAY_OFFSET = 7
 
-# Data-quality gates: a match we cannot see is a match we must not judge.
-MIN_MINUTE = 20.0
-MAX_MINUTE = 80.0
-MIN_XG     = 0.30
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
 
-PRIOR_MIN  = 30.0
-PRIOR_XG90 = 1.35
-MAX_GOALS  = 8
+REQUEST_DELAY_SECONDS = 0.15     # polite pacing between Flashscore requests
+REQUEST_TIMEOUT = 25             # seconds
+MAX_ATTEMPTS = 3                 # per HTTP request
+RETRY_BACKOFF = 1.5              # seconds, doubled per retry
 
-ALERT_COOLDOWN = 1800.0   # same match+side is not re-pinged for 30 min
+TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
+TELEGRAM_MAX_CHARS = 4096
+POLL_TIMEOUT_SECONDS = 25        # Telegram long poll (server holds the request)
+POLL_ERROR_WAIT = 5              # seconds to wait after a polling failure
+BETWEEN_MESSAGE_PAUSE = 0.4      # stay under Telegram's ~1 msg/second limit
 
-# Telegram flood limits are the whole reason this is 10s and not sub-second.
-# Editing on EVERY match (99 matches/sweep) tripped 429, the re-send then hit
-# the per-chat flood limit too, and the dashboard froze silently. One update
-# every 10s is ~12 per sweep: visibly alive, nowhere near the limit.
-DASH_MIN_GAP   = 6.0      # seconds between dashboard updates (~16 per sweep)
-DASH_BACKOFF   = 30.0     # pause after a failed dashboard push
-SWEEP_GAP      = 5.0      # seconds between full sweeps
+# ---- the filter ---------------------------------------------------------- #
+# Every N from N_MIN to N_MAX is checked, each with its own thresholds:
+#     N=3 -> both teams exactly 3 games played, exactly a 3-point gap,
+#            and the four goal figures adding up to at least 2*3 = 6.
+# A match's games-played is a single number, so in practice it can only ever
+# satisfy one N -- but every match is still offered to all of them.
+N_MIN = 1
+N_MAX = 40
+GOALS_MULTIPLIER = 2           # minimum combined goals for a given N = N * this
+# --------------------------------------------------------------------------- #
+
+# Match status codes used by the feed (AB field).
+STATUS_SCHEDULED = "1"
+STATUS_IN_PLAY = "2"
+STATUS_FINISHED = "3"
+STATUS_LABELS = {
+    "1": "scheduled",
+    "2": "in play",
+    "3": "finished",
+    "4": "postponed",
+    "5": "cancelled",
+    "6": "abandoned",
+    "7": "walkover",
+    "8": "retired",
+    "9": "award",
+    "10": "delayed",
+    "11": "not started",
+    "12": "interrupted",
+    "13": "after penalties",
+}
+
+HELP_WORDS = {"help", "/help", "start", "/start", "/commands", "commands", "?", "/?"}
+
+def describe_n(n: int) -> str:
+    """One-line description of a filter variant: 'N=3 (3 games, 3-pt gap, goals >= 6)'."""
+    return (f"N={n} ({n} game{'s' if n != 1 else ''}, {n}-pt gap, "
+            f"goals \u2265 {GOALS_MULTIPLIER * n})")
+
+
+USAGE_TEXT = (
+    "<b>Flashscore daily pattern filter</b>\n"
+    "Send me a date as <b>dd-mm-yyyy</b> and I will scan every football match "
+    "Flashscore lists for that day.\n\n"
+    "Example: <code>15-09-2026</code>\n\n"
+    "A match is reported when <b>all three</b> hold for the same N:\n"
+    "  • both teams have played exactly N league games\n"
+    "  • the points gap between them is exactly N\n"
+    f"  • their four goal figures add up to at least {GOALS_MULTIPLIER}\u00d7N\n\n"
+    f"I check every N from {N_MIN} to {N_MAX} in one pass and group the results by "
+    "the N that matched, skipping any N with no hits.\n\n"
+    f"Flashscore only serves today +/- {MAX_DAY_OFFSET} days, so dates outside "
+    "that window cannot be scanned. Tables are always the current ones."
+)
+
+INVALID_INPUT_TEXT = (
+    "I can only scan a date.\n\n"
+    "Send it as <b>dd-mm-yyyy</b>, for example <code>15-09-2026</code>.\n"
+    "Send <code>help</code> for details."
+)
+
+
+class BotError(Exception):
+    """Fatal, user-facing problem (bad token, unusable timezone, ...)."""
 
 
 # --------------------------------------------------------------------------- #
-# Poisson, stdlib only                                                         #
+# Small helpers
 # --------------------------------------------------------------------------- #
 
-def pois(k: int, lam: float) -> float:
-    if lam <= 0:
-        return 1.0 if k == 0 else 0.0
-    if k < 0:
-        return 0.0
-    return math.exp(-lam + k * math.log(lam) - math.lgamma(k + 1.0))
+def log(message: str) -> None:
+    """Progress to stdout, timestamped, so Replit's console reads like a log."""
+    stamp = _dt.datetime.now().strftime("%H:%M:%S")
+    print(f"[{stamp}] {message}", flush=True)
 
 
-def probs_1x2(sh: int, sa: int, lam_h: float, lam_a: float
-              ) -> Tuple[float, float, float]:
-    gh = [pois(i, lam_h) for i in range(MAX_GOALS + 1)]
-    ga = [pois(j, lam_a) for j in range(MAX_GOALS + 1)]
-    ph = pd = pa = 0.0
-    for i in range(MAX_GOALS + 1):
-        for j in range(MAX_GOALS + 1):
-            p = gh[i] * ga[j]
-            if p < 1e-12:
-                continue
-            fh, fa = sh + i, sa + j
-            if fh > fa:
-                ph += p
-            elif fh == fa:
-                pd += p
-            else:
-                pa += p
-    t = ph + pd + pa
-    return (ph / t, pd / t, pa / t) if t else (0.0, 0.0, 0.0)
+def parse_feed_record(record: str) -> dict:
+    """Turn one '~'-separated feed record into a dict.
+
+    Feed format is  KEY÷value¬KEY÷value¬...  with '~' between records.
+    """
+    fields = {}
+    for chunk in record.split("¬"):
+        if "÷" not in chunk:
+            continue
+        key, _, value = chunk.partition("÷")
+        fields[key.strip()] = value
+    return fields
+
+
+def to_int(value, default=None):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def normalise_name(name: str) -> str:
+    """Loose name key used only as a fallback when team IDs do not match."""
+    name = (name or "").lower()
+    name = re.sub(r"\b(afc|cf|fc|sc|ac|cd|sd|ud|ca|club|de|del|the)\b", " ", name)
+    name = re.sub(r"[^a-z0-9]+", "", name)
+    return name
 
 
 # --------------------------------------------------------------------------- #
-# Flashscore                                                                   #
+# Flashscore HTTP layer
 # --------------------------------------------------------------------------- #
 
-class FS:
-    def __init__(self, geo: str = "NG", geo_sub: str = "NGLA",
-                 delay: float = 0.1, timeout: int = 15) -> None:
-        self.geo, self.geo_sub = geo, geo_sub
-        self.delay, self.timeout = delay, timeout
-        self._last = 0.0
-        self.s = requests.Session()
-        self.s.headers.update({"x-fsign": FSIGN, "user-agent": "Mozilla/5.0"})
+class FeedClient:
+    """Thin, polite, retrying client for Flashscore's internal feed."""
 
-    def _wait(self) -> None:
-        gap = time.time() - self._last
-        if gap < self.delay:
-            time.sleep(self.delay - gap)
-        self._last = time.time()
+    def __init__(self, delay: float = REQUEST_DELAY_SECONDS, quiet: bool = False):
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": USER_AGENT,
+            "X-Fsign": FEED_SIGNATURE,
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": BASE_URL + "/",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        self.delay = delay
+        self.quiet = quiet
+        self.request_count = 0
+        self._last_request = 0.0
+        self._lock = threading.Lock()
 
-    def feed(self, path: str) -> str:
-        self._wait()
-        try:
-            r = self.s.get(f"{FEED_BASE}/{path}", timeout=self.timeout)
-            return r.text if r.status_code == 200 else ""
-        except Exception as e:                                # noqa: BLE001
-            log.debug("feed %s: %s", path, e)
-            return ""
+    def _throttle(self) -> None:
+        with self._lock:
+            elapsed = time.monotonic() - self._last_request
+            if elapsed < self.delay:
+                time.sleep(self.delay - elapsed)
+            self._last_request = time.monotonic()
 
-    def gql(self, **params: Any) -> Dict[str, Any]:
-        self._wait()
-        try:
-            r = self.s.get(GQL_ODDS, params=params, timeout=self.timeout)
-            return r.json() if r.status_code == 200 else {}
-        except Exception as e:                                # noqa: BLE001
-            log.debug("gql: %s", e)
-            return {}
-
-    def fixtures(self, offset: int = 0) -> List[Dict[str, str]]:
-        out: List[Dict[str, str]] = []
-        for chunk in (self.feed(f"f_1_{offset}_3_en_1") or "").split("\u00ac~"):
-            rec: Dict[str, str] = {}
-            for fld in chunk.split("\u00ac"):
-                if "\u00f7" not in fld:
+    def get(self, feed_name: str):
+        """Fetch a feed by name. Returns body text, or None on failure/empty."""
+        url = FEED_URL + feed_name
+        last_error = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            self._throttle()
+            try:
+                self.request_count += 1
+                response = self.session.get(url, timeout=REQUEST_TIMEOUT)
+            except requests.RequestException as exc:      # timeout, DNS, reset...
+                last_error = exc
+                if attempt < MAX_ATTEMPTS:
+                    time.sleep(RETRY_BACKOFF * (2 ** (attempt - 1)))
                     continue
-                k, _, v = fld.partition("\u00f7")
-                k = k.lstrip("~")
-                if k:
-                    rec[k] = v
-            if rec.get("AA"):
-                out.append(rec)
-        return out
-
-    def live(self) -> List[Dict[str, str]]:
-        return [r for r in self.fixtures(0)
-                if r.get("AB") == "2" and r.get("MW")]
-
-    def odds(self, mid: str) -> Dict[str, Any]:
-        """Live 1X2 from a bookmaker that is actually pricing in-play.
-
-        Array order is [home, away, DRAW] -- a null participantId is the draw.
-        """
-        d = self.gql(_hash="oce", eventId=mid, projectId=PROJECT_ID,
-                     geoIpCode=self.geo, geoIpSubdivisionCode=self.geo_sub)
-        groups = (((d.get("data") or {}).get("findOddsByEventId") or {})
-                  .get("odds") or [])
-        hda = [g for g in groups
-               if g.get("bettingType") == "HOME_DRAW_AWAY"
-               and g.get("bettingScope") == "FULL_TIME"]
-        if not hda:
-            return {}
-        hda.sort(key=lambda g: (not g.get("hasLiveBettingOffers"),
-                                g.get("bookmakerId") or 0))
-        best = hda[0]
-        if not best.get("hasLiveBettingOffers"):
-            return {}
-        vals = [it.get("value") for it in (best.get("odds") or [])]
-        if len(vals) != 3:
-            return {}
-        try:
-            home, away, draw = (float(v) for v in vals)
-        except (TypeError, ValueError):
-            return {}
-        if min(home, away, draw) <= 1.0:
-            return {}
-        return {"book": best.get("bookmakerId"),
-                "home": home, "away": away, "draw": draw,
-                "overround": (1 / home + 1 / away + 1 / draw) - 1.0}
-
-
-def parse_sui(body: str) -> Dict[str, Any]:
-    """Incidents feed -> the only reliable clock (match minute)."""
-    periods = re.findall(r"AC\u00f7([^\u00ac~]+)", body or "")
-    mins = [int(m) for m in re.findall(r"IB\u00f7(\d+)", body or "")]
-    return {"period": periods[-1] if periods else "",
-            "max_minute": max(mins) if mins else 0}
-
-
-def parse_stats(body: str) -> Dict[str, Any]:
-    """Statistics feed -> the signalling numbers, per half. SE marks the half."""
-    out: Dict[str, Any] = {}
-    cur = ""
-    for blk in (body or "").split("\u00ac~"):
-        kv = dict(f.split("\u00f7", 1) for f in blk.split("\u00ac")
-                  if "\u00f7" in f)
-        if "SE" in kv:
-            cur = kv["SE"]
-            continue
-        if "SG" not in kv:
-            continue
-        key = kv["SG"]
-        pair = (kv.get("SH", "0"), kv.get("SI", "0"))
-        if cur in ("", "Match"):
-            out[key] = pair
-        elif cur == "2nd Half":
-            out["2H|" + key] = pair
-    return out
-
-
-def _f(v: Any) -> float:
-    try:
-        return float(str(v).strip().rstrip("%"))
-    except Exception:                                         # noqa: BLE001
-        return 0.0
-
-
-# --------------------------------------------------------------------------- #
-# Evaluate one match                                                           #
-# --------------------------------------------------------------------------- #
-
-@dataclass
-class State:
-    mid: str
-    home: str = ""
-    away: str = ""
-    league: str = ""
-    score: Tuple[int, int] = (0, 0)
-    minute: float = 0.0
-    second_half: bool = False
-    xg: Tuple[float, float] = (0.0, 0.0)
-    sot: Tuple[float, float] = (0.0, 0.0)
-    odds: Dict[str, Any] = field(default_factory=dict)
-    model: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-    market: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-    dominant: str = ""
-    xg_share: float = 0.5
-    sot_edge: int = 0
-    price: float = 0.0
-    dnb_price: float = 0.0
-    edge_vig: float = 0.0
-    firing: bool = False
-    skip: str = ""
-
-
-def evaluate(fs: FS, fx: Dict[str, str]) -> State:
-    mid = fx.get("AA", "")
-    st = State(mid=mid, home=fx.get("AE", ""), away=fx.get("AF", ""),
-               league=fx.get("league", ""))
-    try:
-        st.score = (int(fx.get("AG") or 0), int(fx.get("AH") or 0))
-        sui = parse_sui(fs.feed(f"df_sui_1_{mid}"))
-        raw = parse_stats(fs.feed(f"df_st_1_{mid}"))
-        odds = fs.odds(mid)
-
-        h2shots = raw.get("2H|Total shots", ("0", "0"))
-        h2xg = raw.get("2H|Expected goals (xG)", ("0", "0"))
-        st.second_half = (_f(h2shots[0]) + _f(h2shots[1]) > 0
-                          or _f(h2xg[0]) + _f(h2xg[1]) > 0)
-        est = float(sui["max_minute"])
-        if st.second_half:
-            est = max(est, 45.0)
-        st.minute = est
-
-        st.xg = (_f(raw.get("Expected goals (xG)", (0, 0))[0]),
-                 _f(raw.get("Expected goals (xG)", (0, 0))[1]))
-        st.sot = (_f(raw.get("Shots on target", (0, 0))[0]),
-                  _f(raw.get("Shots on target", (0, 0))[1]))
-
-        if not odds:
-            st.skip = "no live odds"
-            return st
-        if (st.xg[0] + st.xg[1]) < MIN_XG:
-            st.skip = "no stats yet"
-            return st
-        if est < MIN_MINUTE:
-            st.skip = "too early"
-            return st
-        if est > MAX_MINUTE:
-            st.skip = "too late"
-            return st
-
-        st.odds = odds
-        xh, xa = st.xg
-        st.xg_share = xh / (xh + xa) if (xh + xa) else 0.5
-        st.sot_edge = int(st.sot[0] - st.sot[1])
-        dom_h = st.xg_share >= XG_SHARE_MIN and st.sot_edge >= SOT_EDGE_MIN
-        dom_a = (1 - st.xg_share) >= XG_SHARE_MIN and -st.sot_edge >= SOT_EDGE_MIN
-        st.dominant = "home" if dom_h else ("away" if dom_a else "")
-
-        min_left = max(0.0, 90.0 - est)
-        obs = max(est, 5.0)
-        rh = (xh + PRIOR_XG90 * PRIOR_MIN / 90.0) / (obs + PRIOR_MIN)
-        ra = (xa + PRIOR_XG90 * PRIOR_MIN / 90.0) / (obs + PRIOR_MIN)
-        st.model = probs_1x2(st.score[0], st.score[1],
-                             rh * min_left, ra * min_left)
-        ih, idr, ia = 1 / odds["home"], 1 / odds["draw"], 1 / odds["away"]
-        s = ih + idr + ia
-        st.market = (ih / s, idr / s, ia / s)
-
-        if st.dominant:
-            idx = 0 if st.dominant == "home" else 1
-            price = odds["home"] if idx == 0 else odds["away"]
-            p_model = st.model[0] if idx == 0 else st.model[1]
-            st.price = price
-            st.edge_vig = (p_model * price - 1.0) + odds["overround"]
-            # draw-no-bet is the same side with the draw removed
-            p_side = st.market[0] if idx == 0 else st.market[1]
-            p_other = st.market[1] if idx == 0 else st.market[0]
-            if p_side + p_other > 0:
-                st.dnb_price = 1.0 / ((p_side + p_other) * (1 + odds["overround"]))
-            behind = (st.score[0] <= st.score[1]) if idx == 0 else \
-                     (st.score[1] <= st.score[0])
-            st.firing = bool(
-                behind and st.second_half and min_left >= MIN_LEFT_MIN
-                and price <= MAX_ODDS and p_model >= MIN_MODEL_P
-                and st.edge_vig >= MIN_EDGE_VIG)
-    except Exception as e:                                    # noqa: BLE001
-        st.skip = f"{type(e).__name__}: {e}"
-    return st
-
-
-# --------------------------------------------------------------------------- #
-# Telegram                                                                     #
-# --------------------------------------------------------------------------- #
-
-def esc(x: Any) -> str:
-    return html.escape(str(x), quote=False)
-
-
-class Telegram:
-    BASE = "https://api.telegram.org/bot{}/{}"
-
-    def __init__(self, token: str, timeout: int = 25) -> None:
-        self.token = token
-        self.url = self.BASE.format(token, "sendMessage")
-        self.edit_url = self.BASE.format(token, "editMessageText")
-        self.timeout = timeout
-        self.offset = 0
-
-    def send(self, cid: int, text: str) -> Optional[int]:
-        try:
-            r = requests.post(self.url, timeout=self.timeout,
-                              data={"chat_id": cid, "text": text,
-                                    "parse_mode": "HTML",
-                                    "disable_web_page_preview": True})
-            if r.status_code == 429:
-                log.warning("send 429 -- rate limited, backing off")
-                time.sleep(5)
+                if not self.quiet:
+                    log(f"  ! {feed_name}: network error ({exc.__class__.__name__})")
                 return None
-            j = r.json() if r.status_code == 200 else {}
-            return (j.get("result") or {}).get("message_id")
-        except Exception as e:                                # noqa: BLE001
-            log.warning("send failed: %s", e)
+
+            if response.status_code == 200:
+                body = response.text
+                # Flashscore answers "0" (or "") when a feed has no data.
+                return body if body and body.strip() not in ("0", "") else None
+            if response.status_code in (429, 500, 502, 503, 504):
+                last_error = f"HTTP {response.status_code}"
+                if attempt < MAX_ATTEMPTS:
+                    time.sleep(RETRY_BACKOFF * (2 ** (attempt - 1)) * 2)
+                    continue
+            if not self.quiet:
+                log(f"  ! {feed_name}: HTTP {response.status_code}")
             return None
 
-    def edit(self, cid: int, msg_id: int, text: str) -> Tuple[bool, float]:
-        """Edit a message -> (ok, retry_after_seconds).
-
-        Telegram answers HTTP 200 with {"ok": false} when it could not edit:
-        "message is not modified" (fine -- already showing this text), 429 with
-        retry_after (back off), or "message to edit not found" (stale -- we
-        must re-send). Treating every 200 as success is how the dashboard
-        silently froze.
-        """
-        try:
-            r = requests.post(self.edit_url, timeout=self.timeout,
-                              data={"chat_id": cid, "message_id": msg_id,
-                                    "text": text, "parse_mode": "HTML",
-                                    "disable_web_page_preview": True})
-            if r.status_code == 429:
-                try:
-                    wait = float(((r.json().get("parameters") or {})
-                                  .get("retry_after")) or 5.0)
-                except Exception:                             # noqa: BLE001
-                    wait = 5.0
-                log.debug("edit 429 -- backing off %.0fs", wait)
-                return False, wait
-            if r.status_code != 200:
-                return False, 0.0
-            j = r.json()
-            if j.get("ok"):
-                return True, 0.0
-            desc = str(j.get("description") or "").lower()
-            if "not modified" in desc:
-                return True, 0.0     # already displaying exactly this text
-            log.debug("edit rejected: %s", j.get("description"))
-            return False, 0.0        # stale or gone -> caller re-sends
-        except Exception as e:                                # noqa: BLE001
-            log.debug("edit failed: %s", e)
-            return False, 0.0
-
-    def updates(self, timeout: int = 20) -> List[dict]:
-        try:
-            r = requests.get(self.BASE.format(self.token, "getUpdates"),
-                             timeout=timeout + 10,
-                             params={"offset": self.offset, "timeout": timeout})
-            data = r.json()
-        except Exception as e:                                # noqa: BLE001
-            log.debug("poll: %s", e)
-            return []
-        out = data.get("result") or []
-        for u in out:
-            self.offset = max(self.offset, (u.get("update_id") or 0) + 1)
-        return out
+        if not self.quiet and last_error:
+            log(f"  ! {feed_name}: giving up after {MAX_ATTEMPTS} attempts ({last_error})")
+        return None
 
 
 # --------------------------------------------------------------------------- #
-# Messages                                                                     #
+# Data model
 # --------------------------------------------------------------------------- #
 
-BAR_LEN = 14
+class TeamStats:
+    __slots__ = ("name", "team_id", "played", "points", "goals_for",
+                 "goals_against", "position", "matched_by")
+
+    def __init__(self, name, team_id, played, points, goals_for, goals_against,
+                 position=None, matched_by="id"):
+        self.name = name
+        self.team_id = team_id
+        self.played = played
+        self.points = points
+        self.goals_for = goals_for
+        self.goals_against = goals_against
+        self.position = position
+        self.matched_by = matched_by
+
+    @property
+    def total_goals(self) -> int:
+        return self.goals_for + self.goals_against
+
+    def line(self, label: str) -> str:
+        return (f"{label}: {self.name} — {self.played} played, {self.points} pts, "
+                f"{self.goals_for} scored, {self.goals_against} conceded")
 
 
-def _bar(done: int, total: int) -> str:
-    if total <= 0:
-        return "-" * BAR_LEN
-    filled = int(BAR_LEN * done / total)
-    return "\u2588" * filled + "\u2591" * (BAR_LEN - filled)
+class Match:
+    def __init__(self, match_id, league, country, stage_id, home_name, away_name,
+                 home_id, away_id, kickoff_utc, status_code, round_name):
+        self.match_id = match_id
+        self.league = league
+        self.country = country
+        self.stage_id = stage_id
+        self.home_name = home_name
+        self.away_name = away_name
+        self.home_id = home_id
+        self.away_id = away_id
+        self.kickoff_utc = kickoff_utc
+        self.status_code = status_code
+        self.round_name = round_name
+        self.home_stats = None
+        self.away_stats = None
+
+    @property
+    def status(self) -> str:
+        return STATUS_LABELS.get(self.status_code, f"status {self.status_code}")
+
+    @property
+    def point_gap(self) -> int:
+        return abs(self.home_stats.points - self.away_stats.points)
+
+    @property
+    def goals_sum(self) -> int:
+        return self.home_stats.total_goals + self.away_stats.total_goals
 
 
-SPIN = ("\u25D0", "\u25D3", "\u25D1", "\u25D2")
+# --------------------------------------------------------------------------- #
+# Step 1 — the day's fixture list
+# --------------------------------------------------------------------------- #
+
+def fetch_day_matches(client: FeedClient, day_offset: int):
+    """Fetch every football match Flashscore lists for one UTC day."""
+    body = client.get(
+        f"f_{SPORT_ID_FOOTBALL}_{day_offset}_{TIMEZONE_SHIFT}_{LANGUAGE}_{PROJECT_TYPE_ID}"
+    )
+    if not body:
+        return []
+
+    matches = []
+    league = country = stage_id = ""
+    seen = set()
+
+    for record in body.split("~"):
+        record = record.strip()
+        if not record:
+            continue
+
+        if record.startswith("ZA"):                      # tournament header
+            fields = parse_feed_record(record)
+            league = fields.get("ZA", "").strip()
+            stage_id = fields.get("ZEE", "").strip()
+            country = fields.get("ZY", "").strip()
+            continue
+
+        if not record.startswith("AA"):                  # not a match record
+            continue
+
+        fields = parse_feed_record(record)
+        match_id = fields.get("AA", "").strip()
+        if not match_id or match_id in seen:
+            continue
+        seen.add(match_id)
+
+        kickoff = to_int(fields.get("AD"))
+        if not kickoff:
+            continue
+
+        matches.append(Match(
+            match_id=match_id,
+            league=league or "Unknown competition",
+            country=country,
+            stage_id=stage_id,
+            home_name=(fields.get("AE") or fields.get("CX") or "?").strip(),
+            away_name=(fields.get("AF") or fields.get("WN") or "?").strip(),
+            home_id=fields.get("PX", "").strip(),
+            away_id=fields.get("PY", "").strip(),
+            kickoff_utc=_dt.datetime.fromtimestamp(kickoff, _dt.timezone.utc),
+            status_code=fields.get("AB", "").strip(),
+            round_name=fields.get("ER", "").strip(),
+        ))
+
+    return matches
 
 
-def dash(now_team: str, done: int, total: int, sweeps: int, uptime: float,
-         judged: int, firing: int, alerts: int,
-         closest: Optional[State], phase: str) -> str:
-    h = int(uptime // 3600)
-    m = int((uptime % 3600) // 60)
-    blink = SPIN[int(time.time()) % len(SPIN)]
-    L = ["\U0001F534 <b>LIVE SCANNER</b>  " + blink + "  " + esc(phase),
-         f"sweep {sweeps}  \u00b7  uptime {h}h {m}m",
-         "",
-         f"<code>{_bar(done, total)}</code> {done}/{total}",
-         "\u25b6 " + esc(now_team),
-         ""]
-    if judged or firing or alerts:
-        L.append(f"judged <b>{judged}</b>  \u00b7  firing <b>{firing}</b>"
-                 f"  \u00b7  alerts <b>{alerts}</b>")
-    if closest is not None:
-        L.append(f"closest: {esc(closest.home)} vs {esc(closest.away)}  "
-                 f"{closest.edge_vig:+.1%}")
+def collect_matches_for_date(client: FeedClient, target_date: _dt.date, tz):
+    """All matches kicking off on `target_date` in timezone `tz`.
+
+    The feed buckets days by UTC, so a local day can straddle two UTC days.
+    We fetch the matching UTC day plus one day either side and then keep only
+    matches whose kickoff really falls on the requested local date.
+    """
+    start_local = _dt.datetime.combine(target_date, _dt.time.min, tzinfo=tz)
+    end_local = start_local + _dt.timedelta(days=1)
+    start_utc = start_local.astimezone(_dt.timezone.utc)
+    end_utc = end_local.astimezone(_dt.timezone.utc)
+
+    today_utc = _dt.datetime.now(_dt.timezone.utc).date()
+    base_offset = (start_utc.date() - today_utc).days
+
+    collected = {}
+    for shift in (-1, 0, 1):
+        offset = base_offset + shift
+        if abs(offset) > MAX_DAY_OFFSET:
+            continue
+        for match in fetch_day_matches(client, offset):
+            if start_utc <= match.kickoff_utc < end_utc:
+                collected[match.match_id] = match
+
+    return sorted(collected.values(), key=lambda m: (m.kickoff_utc, m.league))
+
+
+# --------------------------------------------------------------------------- #
+# Step 2 — league tables
+# --------------------------------------------------------------------------- #
+
+def parse_standings(body: str) -> dict:
+    """Parse a standings feed into id/name -> TeamStats."""
+    by_id = {}
+    by_name = {}
+    position = None
+
+    for record in body.split("~"):
+        record = record.strip()
+        if not record.startswith("TR"):
+            continue
+
+        fields = parse_feed_record(record)
+        name = fields.get("TN", "").strip()
+        team_id = fields.get("TI", "").strip()
+        if not name and not team_id:
+            continue
+
+        position = to_int(fields.get("TR"), position)
+        played = to_int(fields.get("TM"))
+        goals = fields.get("TG", "")
+        goals_for = goals_against = None
+        if ":" in goals:
+            gf, _, ga = goals.partition(":")
+            goals_for, goals_against = to_int(gf), to_int(ga)
+
+        points = to_int(fields.get("TP"))
+        if points is None:
+            # Some competitions do not send TP; derive it from W/D. TPK is the
+            # points a win is worth in this competition (usually "3.00").
+            wins = to_int(fields.get("TW"), 0)
+            draws = to_int(fields.get("TDR"), 0)
+            try:
+                per_win = float(fields.get("TPK") or 0)
+            except ValueError:
+                per_win = 0.0
+            if per_win > 0:
+                points = int(round(wins * per_win + draws * (per_win / 3.0)))
+            elif "TW" in fields and "TDR" in fields:
+                points = wins * 3 + draws
+
+        if played is None or goals_for is None or goals_against is None or points is None:
+            continue
+
+        stats = TeamStats(name, team_id, played, points, goals_for,
+                          goals_against, position)
+        if team_id:
+            by_id[team_id] = stats
+        if name:
+            by_name.setdefault(normalise_name(name), stats)
+        position = (position or 0) + 1
+
+    return {"by_id": by_id, "by_name": by_name}
+
+
+def find_team(table: dict, team_id: str, team_name: str):
+    """Locate a team in a table: exact id first, loose name as a fallback."""
+    if team_id and team_id in table["by_id"]:
+        return table["by_id"][team_id]
+    key = normalise_name(team_name)
+    if key and key in table["by_name"]:
+        stats = table["by_name"][key]
+        return TeamStats(stats.name, stats.team_id, stats.played, stats.points,
+                         stats.goals_for, stats.goals_against, stats.position,
+                         matched_by="name")
+    return None
+
+
+def standings_for_match(client: FeedClient, match: Match, cache: dict):
+    """League table for this match's competition, cached per competition.
+
+    Every match in one competition shares a table, so the competition (stage id)
+    is the cache key — one request per league, not per match. A table that does
+    not contain this match's two teams is NOT trusted for the rest of the league
+    (Flashscore sometimes answers with an unrelated table for cups), so that
+    case is cached per match instead and the league stays retryable.
+    """
+    stage_key = f"stage:{match.stage_id}" if match.stage_id else None
+    match_key = f"match:{match.match_id}"
+    for key in (stage_key, match_key):
+        if key and key in cache:
+            return cache[key]
+
+    # tableId 1 = overall table
+    body = client.get(f"df_to_{PROJECT_TYPE_ID}_{match.match_id}_1")
+    table = parse_standings(body) if body else None
+    if table and not table["by_id"] and not table["by_name"]:
+        table = None                      # feed answered but held no table
+
+    usable = bool(table) and (
+        (match.home_id and match.home_id in table["by_id"])
+        or (match.away_id and match.away_id in table["by_id"])
+    )
+    cache[match_key] = table
+    if usable and stage_key:
+        cache[stage_key] = table
+    return table
+
+
+# --------------------------------------------------------------------------- #
+# Step 3 — the filter
+# --------------------------------------------------------------------------- #
+
+def evaluate(match: Match, n: int):
+    """Test one match against the filter variant for a single N.
+
+    For that N the match must have: both teams on exactly N games played, an
+    absolute points gap of exactly N, and the four goal figures (home GF + home
+    GA + away GF + away GA) adding up to at least GOALS_MULTIPLIER * N.
+
+    Returns (passed, reason).
+    """
+    home, away = match.home_stats, match.away_stats
+    min_goals = GOALS_MULTIPLIER * n
+
+    if home.played != n or away.played != n:
+        return False, (f"{home.played}/{away.played} games played "
+                       f"(need exactly {n} each)")
+    if match.point_gap != n:
+        return False, f"point gap {match.point_gap} (need exactly {n})"
+    if match.goals_sum < min_goals:
+        return False, f"goals sum {match.goals_sum} (need >= {min_goals})"
+    return True, f"gap {match.point_gap}, goals sum {match.goals_sum}"
+
+
+def n_variants():
+    """Every N to check, in ascending order."""
+    return range(N_MIN, N_MAX + 1)
+
+
+def applicable_n(match: Match):
+    """The only N a match could possibly satisfy, or None if it is out of range."""
+    played = match.home_stats.played
+    if played != match.away_stats.played:
+        return None
+    if not (N_MIN <= played <= N_MAX):
+        return None
+    return played
+
+
+# --------------------------------------------------------------------------- #
+# Step 4 — the report
+# --------------------------------------------------------------------------- #
+
+def local_time(match: Match, tz) -> str:
+    return match.kickoff_utc.astimezone(tz).strftime("%H:%M")
+
+
+def build_report(target_date: _dt.date, tz, tz_name: str, passed_by_n,
+                 total_matches: int, skipped, candidates: int, requests_made: int,
+                 seconds: float, utc_label: str = "", note: str = "") -> str:
+    """The report, grouped by the N that matched, as Telegram HTML.
+
+    passed_by_n maps N -> [Match, ...]. N values with no hits are left out
+    entirely so the message only ever shows the patterns that actually fired.
+    Skipped matches are counted in the summary line but not listed.
+    """
+    esc = html.escape
+    # Only N values that actually produced hits get a section; an N with an
+    # empty list is dropped here so callers cannot accidentally print a header
+    # with nothing under it.
+    passed_by_n = {n: list(ms) for n, ms in (passed_by_n or {}).items() if ms}
+    hit_ns = sorted(passed_by_n)
+    total_hits = sum(len(passed_by_n[n]) for n in hit_ns)
+
+    lines = []
+    lines.append("<b>FLASHSCORE DAILY PATTERN FILTER</b>")
+    when = tz_name + (f", {utc_label}" if utc_label else "")
+    lines.append(f"Date: <b>{target_date.strftime('%d-%m-%Y')}</b> ({esc(when)})")
+    lines.append(
+        f"Filter, checked for every N from {N_MIN} to {N_MAX}: both teams exactly "
+        f"N games played | points gap exactly N | combined GF+GA &gt;= "
+        f"{GOALS_MULTIPLIER}&#215;N"
+    )
+    lines.append(
+        f"Scanned {total_matches} scheduled match"
+        f"{'es' if total_matches != 1 else ''}; "
+        f"{total_hits} matched; {len(skipped)} skipped without data."
+    )
+    if hit_ns:
+        lines.append("Hits: " + ", ".join(
+            f"N={n} ({len(passed_by_n[n])})" for n in hit_ns))
+    if note:
+        lines.append(f"<i>{esc(note)}</i>")
+
+    if not total_hits:
+        lines.append("")
+        lines.append("<b>No matches passed the filter on this date.</b>")
+        if total_matches == 0:
+            lines.append("Flashscore listed no scheduled football matches for that day.")
+        else:
+            lines.append(
+                f"{total_matches - len(skipped)} of them had a usable league table, "
+                f"but none satisfied all three conditions for any N from {N_MIN} to "
+                f"{N_MAX} ({candidates} had both teams on the same games played "
+                f"within that range, so only those could ever have matched)."
+            )
     else:
-        L.append("nothing close yet")
-    L.append("")
-    if phase == "STOPPED":
-        L.append("<i>paused \u2014 send /start to resume</i>")
-    else:
-        L.append("<i>quiet = no edge found, still scanning</i>")
-    return "\n".join(L)
+        for n in hit_ns:
+            matches = passed_by_n[n]
+            lines.append("")
+            lines.append(f"<b>{esc(describe_n(n))}:</b>")
+            for index, match in enumerate(matches, start=1):
+                lines.append(f"  {index}. {esc(match.league)}")
+                lines.append(f"     {esc(match.home_name)} vs {esc(match.away_name)}")
+                detail = f"     Kickoff: {local_time(match, tz)} ({esc(tz_name)})"
+                if match.round_name:
+                    detail += f" — {esc(match.round_name)}"
+                lines.append(detail)
+                lines.append("     " + esc(
+                    match.home_stats.line("Home").replace("—", "-")))
+                lines.append("     " + esc(
+                    match.away_stats.line("Away").replace("—", "-")))
+                lines.append(
+                    f"     <b>gap {match.point_gap}, goals sum {match.goals_sum}</b>"
+                    f"  ({match.home_stats.goals_for}+{match.home_stats.goals_against}"
+                    f"+{match.away_stats.goals_for}+{match.away_stats.goals_against}"
+                    f", need \u2265 {GOALS_MULTIPLIER * n})"
+                )
+                lines.append(f"     https://www.flashscore.com/match/{match.match_id}/")
+
+    # The per-match skip breakdown is deliberately not sent: the summary line
+    # above already carries the total ("N skipped without data"), and listing
+    # hundreds of cup/youth matches with no table buried the actual hits.
+    # `skipped` is still collected and logged locally for debugging.
+
+    lines.append("")
+    lines.append(
+        f"<i>{requests_made} requests to Flashscore in {seconds:.0f}s. "
+        f"Source: flashscore.com internal feed.</i>"
+    )
+    return "\n".join(lines)
 
 
-def bet_message(s: State) -> str:
-    side = s.home if s.dominant == "home" else s.away
-    p_model = s.model[0] if s.dominant == "home" else s.model[1]
-    p_market = s.market[0] if s.dominant == "home" else s.market[1]
-    L = ["\U0001F6A8 <b>BET NOW</b>",
-         f"<b>{esc(s.home)} vs {esc(s.away)}</b>",
-         f"{esc(s.league)}",
-         "",
-         f"minute &gt;= {s.minute:.0f}'  \u00b7  score "
-         f"{s.score[0]}-{s.score[1]}",
-         "",
-         f"\U0001F449 <b>BET: {esc(side)} to win @ {s.price:.2f}</b>"]
-    if s.dnb_price > 1.0:
-        L.append(f"   safer: {esc(side)} Draw No Bet ~{s.dnb_price:.2f}")
-    L += ["",
-          f"why: dominating but not ahead",
-          f"xG {s.xg_share:.0%}  \u00b7  shots on target {s.sot_edge:+d}",
-          f"model {p_model:.0%}  vs  market {p_market:.0%}",
-          f"overround {s.odds['overround']:.1%}  \u00b7  "
-          f"edge {s.edge_vig:+.1%}",
-          "",
-          "<i>Paper mode \u2014 not proven. Clock is a lower bound and live "
-          "data lags a few minutes, so CHECK THE PRICE before betting.</i>"]
-    return "\n".join(L)
+def split_message(text: str, limit: int = TELEGRAM_MAX_CHARS):
+    """Split on line boundaries so no Telegram message exceeds the limit."""
+    if len(text) <= limit:
+        return [text]
+
+    lines = text.split("\n")
+    chunks = []
+    current = []
+    current_len = 0
+    for line in lines:
+        # A single line longer than the limit gets hard-wrapped.
+        while len(line) > limit - 20:
+            if current:
+                chunks.append("\n".join(current))
+                current, current_len = [], 0
+            chunks.append(line[:limit - 20])
+            line = line[limit - 20:]
+        extra = len(line) + (1 if current else 0)
+        if current_len + extra > limit - 20:
+            chunks.append("\n".join(current))
+            current, current_len = [], 0
+            extra = len(line)
+        current.append(line)
+        current_len += extra
+    if current:
+        chunks.append("\n".join(current))
+
+    if len(chunks) > 1:
+        total = len(chunks)
+        chunks = [f"({i}/{total})\n{chunk}" for i, chunk in enumerate(chunks, start=1)]
+    return chunks
 
 
 # --------------------------------------------------------------------------- #
-# Bot                                                                          #
+# Telegram API
 # --------------------------------------------------------------------------- #
 
-class Scanner:
-    def __init__(self, token: str, geo: str = "NG", geo_sub: str = "NGLA",
-                 limit: int = 200) -> None:
-        self.tg = Telegram(token)
-        self.fs = FS(geo=geo, geo_sub=geo_sub)
-        self.limit = limit
-        self.cid: Optional[int] = None
-        self.msg_id: Optional[int] = None
-        self.recent: Dict[str, float] = {}
-        self._last_edit = 0.0
-        self._blocked_until = 0.0
-        self.stop = threading.Event()
-        self.paused = False
-        self.st = {"sweeps": 0, "alerts": 0, "live": 0,
-                   "judged": 0, "firing": 0, "error": "", "started": 0.0}
+class TelegramAPI:
+    """Minimal Telegram Bot API client: getUpdates + sendMessage."""
 
-    # -- persistence -------------------------------------------------------- #
+    def __init__(self, token: str):
+        self.token = token
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": USER_AGENT})
 
-    def load(self) -> bool:
+    def _url(self, method: str) -> str:
+        return TELEGRAM_API.format(token=self.token, method=method)
+
+    def call(self, method: str, payload: dict = None, timeout: int = REQUEST_TIMEOUT):
+        """Return (ok, result_or_error, status_code)."""
         try:
-            d = json.load(open(CHAT_FILE, encoding="utf8"))
-            self.cid = d.get("chat_id")
-            self.msg_id = d.get("msg_id")
-            return bool(self.cid)
-        except Exception:                                     # noqa: BLE001
-            return False
-
-    def save(self) -> None:
+            response = self.session.post(self._url(method), data=payload or {},
+                                         timeout=timeout)
+        except requests.RequestException as exc:
+            return False, f"{exc.__class__.__name__}: {exc}", None
         try:
-            json.dump({"chat_id": self.cid, "msg_id": self.msg_id},
-                      open(CHAT_FILE, "w", encoding="utf8"))
-        except OSError as e:                                  # noqa: BLE001
-            log.warning("could not save chat: %s", e)
+            data = response.json()
+        except ValueError:
+            return False, f"non-JSON response (HTTP {response.status_code})", response.status_code
+        if response.status_code == 200 and data.get("ok"):
+            return True, data.get("result"), response.status_code
+        description = data.get("description") or f"HTTP {response.status_code}"
+        retry_after = None
+        if isinstance(data.get("parameters"), dict):
+            retry_after = data["parameters"].get("retry_after")
+        return False, {"description": description, "retry_after": retry_after}, response.status_code
 
-    # -- dashboard ---------------------------------------------------------- #
+    # -- receiving ---------------------------------------------------------
+    def get_updates(self, offset: int, timeout: int = POLL_TIMEOUT_SECONDS):
+        return self.call("getUpdates", {
+            "offset": offset,
+            "timeout": timeout,
+            "allowed_updates": json.dumps(["message"]),
+        }, timeout=timeout + 15)
 
-    def push_dash(self, text: str, force: bool = False) -> None:
-        if self.cid is None:
-            return
-        now = time.time()
-        if now < self._blocked_until:
-            return                              # serving out a 429 backoff
-        if not force and now - self._last_edit < DASH_MIN_GAP:
-            return
-        self._last_edit = now
-        if self.msg_id:
-            ok, wait = self.tg.edit(self.cid, self.msg_id, text)
+    def flush_stale_updates(self) -> None:
+        """Drop anything queued while the bot was offline so it does not
+        suddenly fire off a pile of old scans on startup."""
+        ok, result, _ = self.call("getUpdates", {"offset": -1, "timeout": 0}, timeout=20)
+        if ok and isinstance(result, list) and result:
+            log(f"  ignored {len(result)} stale update(s) queued while offline")
+
+    def verify(self) -> str:
+        """Check the token. Returns the bot's @username, or raises BotError."""
+        ok, result, status = self.call("getMe", timeout=20)
+        if not ok:
+            description = result["description"] if isinstance(result, dict) else result
+            if status == 401:
+                raise BotError(
+                    "Telegram rejected the bot token (HTTP 401). Check "
+                    "TELEGRAM_BOT_TOKEN / telegram_config.json / --token."
+                )
+            raise BotError(f"Could not reach Telegram to verify the token: {description}")
+        return (result or {}).get("username", "?")
+
+    # -- sending -----------------------------------------------------------
+    def send_text(self, chat_id, text: str) -> bool:
+        """Send one message, honouring Telegram's 429 retry_after."""
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+        }
+        for attempt in range(1, MAX_ATTEMPTS + 2):
+            ok, result, status = self.call("sendMessage", payload)
             if ok:
-                return
-            if wait > 0:                        # 429: back off, keep the id
-                self._blocked_until = time.time() + wait
-                return
-            self.msg_id = None                  # stale: re-anchor below
-        mid = self.tg.send(self.cid, text)
-        if mid:
-            self.msg_id = mid
-            self.save()
-        else:
-            # could not even send -- stop hammering and try again later
-            self._blocked_until = time.time() + DASH_BACKOFF
-            log.warning("dashboard send failed; backing off %.0fs",
-                        DASH_BACKOFF)
-
-    def say(self, text: str) -> None:
-        """One-off message. Deliberately does NOT touch the dashboard id."""
-        if self.cid is not None:
-            if not self.tg.send(self.cid, text):
-                log.warning("could not send message to %s", self.cid)
-        else:
-            print(text)
-
-    # -- first contact ------------------------------------------------------- #
-
-    def wait_for_chat(self) -> None:
-        """Block until the user sends anything at all, then remember them."""
-        print("waiting for your first message in telegram "
-              "(send the bot anything)...", flush=True)
-        while not self.stop.is_set() and self.cid is None:
-            for u in self.tg.updates(10):
-                msg = u.get("message") or {}
-                chat = msg.get("chat") or {}
-                if chat.get("id"):
-                    self.cid = chat["id"]
-                    self.save()
-                    self.say("\U0001F7E2 <b>connected</b> \u2014 scanning now.\n\n"
-                             "This message updates itself as I work.\n"
-                             "Only commands: <code>/stop</code> and "
-                             "<code>/start</code>")
-                    return
-            time.sleep(1)
-
-    # -- the only two commands --------------------------------------------- #
-
-    def _on_command(self, text: str) -> None:
-        cmd = ""
-        if text:
-            cmd = text.split()[0].split("@")[0].lower()
-        if cmd == "/stop":
-            if self.paused:
-                self.say("already stopped \u2014 /start to resume")
-                return
-            self.paused = True
-            uptime = time.time() - self.st["started"] if self.st["started"] else 0
-            self.push_dash(dash("stopped", 0, 0, self.st["sweeps"], uptime,
-                                self.st["judged"], self.st["firing"],
-                                self.st["alerts"], None, "STOPPED"),
-                           force=True)
-            self.say("\u23F8 <b>stopped</b> \u2014 no more scanning.\n"
-                     "<code>/start</code> to resume.")
-        elif cmd in ("/start", "/resume", "/go"):
-            if not self.paused:
-                self.say("already scanning")
-                return
-            self.paused = False
-            # drop the old dashboard id so the next push sends a FRESH
-            # message at the bottom of the chat -- an edited message stays
-            # where it was, and after a long pause it is scrolled far away
-            self.msg_id = None
-            self.say("\u25B6 <b>scanning again</b>")
-        elif cmd:
-            self.say("Only two commands: <code>/stop</code> and "
-                     "<code>/start</code>")
-
-    def _poll(self) -> None:
-        """Background listener for /stop and /start."""
-        while not self.stop.is_set():
-            try:
-                for u in self.tg.updates(5):
-                    msg = u.get("message") or {}
-                    chat = msg.get("chat") or {}
-                    cid = chat.get("id")
-                    if not cid:
-                        continue
-                    if self.cid is None:
-                        self.cid = cid
-                        self.save()
-                        self.say("\U0001F7E2 <b>connected</b> \u2014 scanning "
-                                 "now.\n\nOnly commands: <code>/stop</code> "
-                                 "and <code>/start</code>")
-                        continue
-                    self._on_command((msg.get("text") or "").strip())
-            except Exception as e:                            # noqa: BLE001
-                log.debug("poll: %s", e)
-            time.sleep(1)
-
-    # -- the loop ------------------------------------------------------------ #
-
-    def loop(self) -> None:
-        if not self.st["started"]:
-            self.st["started"] = time.time()
-        while not self.stop.is_set():
-            if self.paused:
-                self.stop.wait(2)
+                return True
+            description = result["description"] if isinstance(result, dict) else result
+            retry_after = result.get("retry_after") if isinstance(result, dict) else None
+            if retry_after:
+                log(f"  ! Telegram rate limit; waiting {retry_after}s")
+                time.sleep(int(retry_after) + 1)
                 continue
-            if self.cid is None:
-                self.stop.wait(2)
+            log(f"  ! Telegram send failed (HTTP {status}): {description}")
+            if status in (429, 500, 502, 503, 504) and attempt <= MAX_ATTEMPTS:
+                time.sleep(RETRY_BACKOFF * attempt)
+                continue
+            return False
+        return False
+
+    def deliver(self, chat_id, text: str) -> bool:
+        """Send a possibly-long report as one or more messages."""
+        chunks = split_message(text)
+        ok = True
+        for chunk in chunks:
+            if not self.send_text(chat_id, chunk):
+                ok = False
+            time.sleep(BETWEEN_MESSAGE_PAUSE)
+        return ok
+
+
+def load_credentials(args):
+    """CLI flags > environment variables > telegram_config.json."""
+    token = (args.token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
+    chat_id = (args.chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
+
+    if not (token and chat_id):
+        candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_config.json"),
+            os.path.join(os.getcwd(), "telegram_config.json"),
+        ]
+        for path in candidates:
+            if not os.path.isfile(path):
                 continue
             try:
-                self.sweep_once()
-            except Exception as e:                            # noqa: BLE001
-                self.st["error"] = f"{type(e).__name__}: {e}"
-                log.warning("sweep failed: %s", e)
-                try:
-                    self.push_dash(dash(self.st["error"], 0, 0,
-                                        self.st["sweeps"],
-                                        time.time() - self.st["started"],
-                                        0, 0, self.st["alerts"],
-                                        None, "error \u2014 retrying"),
-                                   force=True)
-                except Exception:                             # noqa: BLE001
-                    pass
-            self.stop.wait(SWEEP_GAP)
+                with open(path, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+            except (OSError, ValueError) as exc:
+                raise BotError(f"Could not read {path}: {exc}") from exc
+            token = token or str(data.get("bot_token", "")).strip()
+            chat_id = chat_id or str(data.get("chat_id", "")).strip()
+            break
 
-    def sweep_once(self) -> None:
-        uptime = time.time() - self.st["started"]
-        self.st["sweeps"] += 1
-        self.st["error"] = ""
+    if not token:
+        raise BotError(
+            "No Telegram bot token found. Set TELEGRAM_BOT_TOKEN (on Replit: the "
+            "Secrets tool), or put {\"bot_token\": \"...\"} in telegram_config.json "
+            "next to this script, or pass --token. See the notes at the top of the file."
+        )
+    return token, chat_id
 
-        live = self.fs.live()
-        total = min(len(live), self.limit)
-        self.st["live"] = len(live)
 
-        judged: List[State] = []
-        firing: List[State] = []
+# --------------------------------------------------------------------------- #
+# The scan (unchanged logic, now driven by a chat message instead of a flag)
+# --------------------------------------------------------------------------- #
 
-        for i, fx in enumerate(live[:self.limit], 1):
-            if self.stop.is_set():
-                return
-            s = evaluate(self.fs, fx)
-            if not s.skip:
-                judged.append(s)
-                if s.firing:
-                    firing.append(s)
-            self.st["judged"] = len(judged)
-            self.st["firing"] = len(firing)
-
-            near = sorted((x for x in judged if x.price),
-                          key=lambda x: -x.edge_vig)
-            self.push_dash(dash(f"{s.home} vs {s.away}", i, total,
-                                self.st["sweeps"], uptime, len(judged),
-                                len(firing), self.st["alerts"],
-                                near[0] if near else None, "scanning"))
-
-        # fire the alerts
-        now = time.time()
-        for s in sorted(firing, key=lambda x: -x.edge_vig):
-            key = f"{s.mid}:{s.dominant}"
-            if now - self.recent.get(key, 0.0) < ALERT_COOLDOWN:
-                continue
-            self.recent[key] = now
-            self._log(s)
-            self.st["alerts"] += 1
-            self.say(bet_message(s))
-
-        near = sorted((x for x in judged if x.price),
-                      key=lambda x: -x.edge_vig)
-        self.push_dash(dash("idle \u2014 waiting for next sweep", total, total,
-                            self.st["sweeps"], uptime, len(judged),
-                            len(firing), self.st["alerts"],
-                            near[0] if near else None, "watching"),
-                       force=True)
-
-    def _log(self, s: State) -> None:
+def resolve_timezone(name: str):
+    """Return (tzinfo, zone label, utc-offset label) for day boundaries/times."""
+    if not name:
+        tz = _dt.datetime.now().astimezone().tzinfo
+        zone_label = getattr(tz, "key", None) or str(tz) or "local time"
+        if zone_label in ("UTC", "tzutc()"):
+            zone_label = "UTC"
+    else:
         try:
-            with open(LEDGER, "a", encoding="utf8") as fh:
-                fh.write(json.dumps({
-                    "ts": time.time(), "mid": s.mid, "home": s.home,
-                    "away": s.away, "dominant": s.dominant, "odds": s.price,
-                    "edge": s.edge_vig, "minute": s.minute,
-                    "score": list(s.score)}, ensure_ascii=False) + "\n")
-        except OSError as e:                                  # noqa: BLE001
-            log.warning("ledger: %s", e)
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(name)
+            zone_label = name
+        except Exception as exc:
+            raise BotError(
+                f"Unknown or unavailable timezone '{name}' ({exc}). "
+                "Drop --timezone to use the server's local time."
+            ) from exc
+    try:
+        offset = _dt.datetime.now(tz).strftime("%z")          # e.g. +0100
+        utc_label = "" if zone_label == "UTC" else f"UTC{offset[:3]}:{offset[3:]}"
+    except Exception:
+        utc_label = ""
+    return tz, zone_label, utc_label
 
-    def run(self) -> None:
-        threading.Thread(target=self._poll, daemon=True,
-                         name="cmds").start()
-        if not self.load() or self.cid is None:
-            self.wait_for_chat()
-        if self.cid is None:
+
+DATE_PATTERN = re.compile(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b")
+
+
+def extract_dates(value: str):
+    """Pull every dd-mm-yyyy date out of a message.
+
+    Returns (dates, saw_candidate) where saw_candidate means something looked
+    like a date but was not a real one (e.g. 31-02-2026), so the caller can
+    answer with the format explanation instead of staying silent.
+    """
+    dates = []
+    saw_candidate = False
+    for day, month, year in DATE_PATTERN.findall(value or ""):
+        saw_candidate = True
+        try:
+            parsed = _dt.datetime.strptime(f"{day}-{month}-{year}", "%d-%m-%Y").date()
+        except ValueError:
+            continue                      # e.g. 31-02-2026 or month 13
+        if parsed not in dates:
+            dates.append(parsed)
+    return dates, saw_candidate
+
+
+def parse_date(value: str):
+    """Convenience wrapper: the first date in a message, or None."""
+    dates, saw = extract_dates(value)
+    return dates[0] if dates else None
+
+
+def check_window(target_date: _dt.date, tz) -> str:
+    """Return '' if Flashscore can serve this date, else a plain explanation."""
+    start_local = _dt.datetime.combine(target_date, _dt.time.min, tzinfo=tz)
+    start_utc = start_local.astimezone(_dt.timezone.utc).date()
+    offset = (start_utc - _dt.datetime.now(_dt.timezone.utc).date()).days
+    if abs(offset) <= MAX_DAY_OFFSET:
+        return ""
+    today = _dt.datetime.now(tz).date()
+    low = today - _dt.timedelta(days=MAX_DAY_OFFSET)
+    high = today + _dt.timedelta(days=MAX_DAY_OFFSET)
+    return (
+        f"Sorry, <b>{target_date.strftime('%d-%m-%Y')}</b> is outside the range "
+        f"Flashscore serves.\n\n"
+        f"Their daily fixture feed is a rolling window of today +/- "
+        f"{MAX_DAY_OFFSET} days; anything older or further ahead comes back empty, "
+        f"so there is nothing to filter.\n\n"
+        f"Today is {today.strftime('%d-%m-%Y')}, so I can scan "
+        f"<b>{low.strftime('%d-%m-%Y')}</b> to <b>{high.strftime('%d-%m-%Y')}</b>."
+    )
+
+
+def run_scan(tg: TelegramAPI, chat_id, target_date: _dt.date, settings) -> None:
+    """Fetch fixtures, pull tables, filter, and reply in the chat."""
+    tz, tz_name, utc_label = settings["tz"], settings["tz_name"], settings["utc_label"]
+    started = time.monotonic()
+    client = FeedClient(delay=settings["delay"], quiet=False)
+
+    log(f"  scanning {target_date.strftime('%d-%m-%Y')} for chat {chat_id} ...")
+    tg.send_text(chat_id,
+                 f"Scanning <b>{target_date.strftime('%d-%m-%Y')}</b> "
+                 f"({tz_name})\u2026 this usually takes 20\u201390 seconds.")
+
+    # -- Step 1: fixtures --------------------------------------------------
+    try:
+        matches = collect_matches_for_date(client, target_date, tz)
+    except requests.RequestException as exc:
+        tg.send_text(chat_id, f"Could not reach Flashscore ({exc.__class__.__name__}). "
+                              "Please send the date again in a moment.")
+        log(f"  ! Flashscore unreachable: {exc}")
+        return
+
+    log(f"  found {len(matches)} match(es) kicking off on that date")
+
+    if not matches:
+        # Still tell the user — silently doing nothing is worse.
+        report = build_report(target_date, tz, tz_name, [], 0, [], 0,
+                              client.request_count, time.monotonic() - started,
+                              utc_label)
+        tg.deliver(chat_id, report)
+        log("  sent 'no matches listed' notice")
+        return
+
+    # -- Steps 2 & 3: standings + filter ----------------------------------
+    passed_by_n = collections.defaultdict(list)
+    skipped = []
+    candidates = 0
+    table_cache = {}
+    total = len(matches)
+
+    for index, match in enumerate(matches, start=1):
+        if index % 100 == 0:
+            log(f"  ...{index}/{total} matches checked")
+
+        label = f"{match.home_name} vs {match.away_name} ({match.league})"
+
+        if match.status_code != STATUS_SCHEDULED and not settings["include_started"]:
+            skipped.append((label, f"not a scheduled match (it is {match.status})"))
+            continue
+
+        try:
+            table = standings_for_match(client, match, table_cache)
+        except Exception as exc:                    # never let one match kill a run
+            skipped.append((label, f"standings request failed ({exc.__class__.__name__})"))
+            continue
+
+        if not table:
+            skipped.append((label, "no league table available for this competition"))
+            continue
+
+        try:
+            match.home_stats = find_team(table, match.home_id, match.home_name)
+            match.away_stats = find_team(table, match.away_id, match.away_name)
+        except Exception as exc:
+            skipped.append((label, f"could not read the table ({exc.__class__.__name__})"))
+            continue
+
+        if match.home_stats is None and match.away_stats is None:
+            skipped.append((label, "neither team appears in that table"))
+            continue
+        if match.home_stats is None:
+            skipped.append((label, f"home team '{match.home_name}' not in the table"))
+            continue
+        if match.away_stats is None:
+            skipped.append((label, f"away team '{match.away_name}' not in the table"))
+            continue
+
+        # Offer the match to every N variant. Fixtures and tables were fetched
+        # once above, so this is pure in-memory work -- no extra requests.
+        candidate = applicable_n(match)
+        if candidate is not None:
+            candidates += 1
+        try:
+            for n in n_variants():
+                ok, _reason = evaluate(match, n)
+                if ok:
+                    passed_by_n[n].append(match)
+                    log(f"  PASS N={n}: {label} — gap {match.point_gap}, "
+                        f"goals {match.goals_sum}")
+        except Exception as exc:
+            skipped.append((label, f"filter error ({exc.__class__.__name__})"))
+            continue
+
+    seconds = time.monotonic() - started
+    note = ""
+    if target_date < _dt.datetime.now(tz).date():
+        note = ("This date is in the past. Flashscore serves no historical standings, "
+                "so the tables above are the current ones.")
+    report = build_report(target_date, tz, tz_name, passed_by_n, total, skipped,
+                          candidates, client.request_count, seconds, utc_label, note)
+
+    # -- Step 4: reply in the same chat -----------------------------------
+    total_hits = sum(len(v) for v in passed_by_n.values())
+    if tg.deliver(chat_id, report):
+        breakdown = ", ".join(f"N={n}:{len(passed_by_n[n])}"
+                              for n in sorted(passed_by_n)) or "none"
+        log(f"  sent report: {total_hits} matched ({breakdown}) / {total} scanned "
+            f"({client.request_count} requests, {seconds:.0f}s)")
+    else:
+        log("  ! report delivery to Telegram failed")
+
+
+# --------------------------------------------------------------------------- #
+# Bot: long-poll Telegram, hand dates to a single worker
+# --------------------------------------------------------------------------- #
+
+class FilterBot:
+    def __init__(self, tg: TelegramAPI, settings):
+        self.tg = tg
+        self.settings = settings
+        self.jobs = queue.Queue()
+        self.offset = 0
+        self._stop = threading.Event()
+        self._worker = None
+
+    # -- worker -----------------------------------------------------------
+    def start_worker(self) -> None:
+        self._worker = threading.Thread(target=self._work_loop, name="scanner",
+                                        daemon=True)
+        self._worker.start()
+
+    def _work_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                job = self.jobs.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if job is None:
+                break
+            chat_id, target_date = job
+            try:
+                run_scan(self.tg, chat_id, target_date, self.settings)
+            except Exception as exc:                # a bad scan must not kill the bot
+                log(f"  ! scan failed: {exc.__class__.__name__}: {exc}")
+                try:
+                    self.tg.send_text(
+                        chat_id,
+                        "That scan failed with an unexpected error "
+                        f"({exc.__class__.__name__}). Nothing is broken — please "
+                        "send the date again."
+                    )
+                except Exception:
+                    pass
+            finally:
+                self.jobs.task_done()
+
+    # -- message handling -------------------------------------------------
+    def allowed(self, chat_id) -> bool:
+        restrict = self.settings.get("restrict_chat_id")
+        if not restrict:
+            return True
+        return str(chat_id) == str(restrict)
+
+    def handle_message(self, message: dict) -> None:
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        if chat_id is None:
             return
-        print(f"chat {self.cid} \u2014 scanning  "
-              f"(/stop to pause, /start to resume)", flush=True)
-        self.loop()
+
+        text = (message.get("text") or "").strip()
+        who = chat.get("username") or chat.get("first_name") or chat_id
+
+        if not text:
+            self.tg.send_text(chat_id, INVALID_INPUT_TEXT)
+            return
+
+        if text.lower() in HELP_WORDS:
+            log(f"  help request from {who} ({chat_id})")
+            self.tg.send_text(chat_id, USAGE_TEXT)
+            return
+
+        if not self.allowed(chat_id):
+            log(f"  ignored message from unauthorised chat {chat_id}")
+            self.tg.send_text(chat_id, "This bot is restricted to another chat.")
+            return
+
+        dates, saw_candidate = extract_dates(text)
+        if not dates:
+            log(f"  unparseable input from {who} ({chat_id}): {text[:60]!r}")
+            self.tg.send_text(chat_id, INVALID_INPUT_TEXT if not saw_candidate else
+                              "I could not read a real date in that.\n\n"
+                              "Send it as <b>dd-mm-yyyy</b>, for example "
+                              "<code>15-09-2026</code>.")
+            return
+
+        queued = []
+        for target_date in dates:
+            outside = check_window(target_date, self.settings["tz"])
+            if outside:
+                log(f"  out-of-window date from {who} ({chat_id}): "
+                    f"{target_date.strftime('%d-%m-%Y')}")
+                self.tg.send_text(chat_id, outside)
+                continue
+            if self.jobs.qsize() >= 1:
+                self.tg.send_text(chat_id,
+                                  "Got it — I am still working through an earlier "
+                                  "date, so this one is queued behind it.")
+            log(f"  date {target_date.strftime('%d-%m-%Y')} queued from {who} "
+                f"({chat_id}); {self.jobs.qsize()} job(s) already waiting")
+            self.jobs.put((chat_id, target_date))
+            queued.append(target_date)
+
+        if len(queued) > 1:
+            listing = ", ".join(d.strftime("%d-%m-%Y") for d in queued)
+            self.tg.send_text(chat_id, f"I found {len(queued)} dates in that message "
+                                       f"({listing}) and will answer each one in turn.")
+
+    # -- polling ----------------------------------------------------------
+    def poll_forever(self, max_cycles: int = None) -> None:
+        cycles = 0
+        consecutive_errors = 0
+        auth_failures = 0
+        while not self._stop.is_set():
+            if max_cycles is not None and cycles >= max_cycles:
+                break
+            cycles += 1
+
+            ok, result, status = self.tg.get_updates(self.offset,
+                                                     self.settings["poll_timeout"])
+            if not ok:
+                description = result["description"] if isinstance(result, dict) else result
+                consecutive_errors += 1
+                if status == 401:
+                    auth_failures += 1
+                    if auth_failures >= 3:
+                        raise BotError(
+                            "Telegram rejected the token three times in a row "
+                            "(HTTP 401). Is it still valid?")
+                    log(f"  ! Telegram returned 401 (attempt {auth_failures}/3); "
+                        "retrying in case it is transient")
+                    self._stop.wait(POLL_ERROR_WAIT)
+                    continue
+                if status == 409:
+                    log("  ! HTTP 409: another copy of this bot is polling with the "
+                        "same token. Stop the other one; retrying.")
+                else:
+                    log(f"  ! getUpdates failed ({description}); retrying in "
+                        f"{POLL_ERROR_WAIT}s")
+                self._stop.wait(POLL_ERROR_WAIT)
+                continue
+
+            consecutive_errors = 0
+            auth_failures = 0
+            if not isinstance(result, list):
+                continue
+
+            for update in result:
+                update_id = update.get("update_id") or 0
+                self.offset = max(self.offset, update_id + 1)
+                message = update.get("message")
+                if not message:
+                    continue                      # edited/channel posts are ignored
+                try:
+                    self.handle_message(message)
+                except Exception as exc:
+                    log(f"  ! error handling update {update_id}: "
+                        f"{exc.__class__.__name__}: {exc}")
+
+        log("  polling stopped")
+
+    def stop(self) -> None:
+        self._stop.set()
+        self.jobs.put(None)
 
 
-def settle(fs: FS) -> str:
-    if not os.path.exists(LEDGER):
-        return "No alerts logged yet."
-    rows = [json.loads(l) for l in open(LEDGER, encoding="utf8") if l.strip()]
-    finals: Dict[str, Tuple[int, int]] = {}
-    for off in (-1, 0):
-        for r in fs.fixtures(off):
-            if r.get("AB") == "3" and r.get("AA"):
-                finals[r["AA"]] = (int(r.get("AG") or 0), int(r.get("AH") or 0))
-    seen: set = set()
-    staked = wins = 0
-    pnl = 0.0
-    for r in rows:
-        mid = r.get("mid")
-        o = float(r.get("odds") or 0)
-        if not mid or mid in seen or o <= 1.0:
-            continue
-        seen.add(mid)
-        f = finals.get(mid)
-        if not f:
-            continue
-        staked += 1
-        won = (f[0] > f[1]) if r.get("dominant") == "home" else (f[1] > f[0])
-        if won:
-            wins += 1
-            pnl += o - 1.0
-        else:
-            pnl -= 1.0
-    if not staked:
-        return f"{len(seen)} alert(s) logged, none finished yet."
-    out = [f"settled {staked}  \u00b7  won {wins}  \u00b7  "
-           f"hit rate {wins / staked:.0%}",
-           f"flat 1u ROI: {pnl:+.2f}u  ({pnl / staked:+.1%} per bet)"]
-    if staked < 100:
-        out.append(f"NOT ENOUGH DATA ({staked}/100) \u2014 keep paper mode on.")
-    return "\n".join(out)
+# --------------------------------------------------------------------------- #
+# Keep-alive HTTP endpoint (so Replit's Run button has a listening port)
+# --------------------------------------------------------------------------- #
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    server_version = "FlashscoreFilterBot/1.0"
+
+    def _respond(self) -> None:
+        body = b"Flashscore daily pattern filter bot is running.\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except OSError:
+            pass
+
+    do_GET = do_HEAD = do_POST = _respond
+
+    def log_message(self, *args) -> None:          # keep the console clean
+        pass
 
 
-def doctor() -> int:
-    issues = 0
-
-    def say(tag: str, good: bool, detail: str = "") -> None:
-        nonlocal issues
-        if not good:
-            issues += 1
-        print(f"  [{'OK  ' if good else 'FAIL'}] {tag:<20} {detail}")
-
-    v = sys.version_info
-    print("python")
-    say("version >= 3.9", v >= (3, 9), f"{v.major}.{v.minor}.{v.micro}")
-    print("\npackages")
+def start_health_server(port: int):
     try:
-        import requests as _r                                 # noqa: F401
-        say("requests", True, _r.__version__)
-    except Exception as e:                                    # noqa: BLE001
-        say("requests", False, "missing \u2014 pip install requests")
-    print("\nnetwork")
-    fs = FS()
+        server = ThreadingHTTPServer(("0.0.0.0", port), _HealthHandler)
+    except OSError as exc:
+        log(f"  note: could not bind keep-alive port {port} ({exc}); "
+            "the bot still runs fine")
+        return None
+    thread = threading.Thread(target=server.serve_forever, name="keepalive",
+                              daemon=True)
+    thread.start()
+    log(f"  keep-alive HTTP endpoint listening on 0.0.0.0:{port}")
+    return server
+
+
+# --------------------------------------------------------------------------- #
+# Entry point
+# --------------------------------------------------------------------------- #
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="filter_bot.py",
+        description="Long-running Telegram bot: send it a date (dd-mm-yyyy) and it "
+                    "replies with the Flashscore matches that pass the "
+                    f"N={N_MIN}..{N_MAX} pattern filter "
+                    f"(N games, N-point gap, goals \u2265 {GOALS_MULTIPLIER}\u00d7N).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Normally you just run:  python filter_bot.py",
+    )
+    parser.add_argument("--token", default="",
+                        help="Telegram bot token (overrides env/config)")
+    parser.add_argument("--chat-id", default="",
+                        help="optional fallback chat id (overrides env/config)")
+    parser.add_argument("--restrict-chat-id", default="",
+                        help="if set, only answer this chat id and ignore everyone else")
+    parser.add_argument("--timezone", default="",
+                        help="IANA timezone for day boundaries and kickoff times, "
+                             "e.g. Africa/Lagos (default: this machine's timezone)")
+    parser.add_argument("--include-started", action="store_true",
+                        help="also check matches already in play or finished that day")
+    parser.add_argument("--delay", type=float, default=REQUEST_DELAY_SECONDS,
+                        help=f"seconds between Flashscore requests "
+                             f"(default {REQUEST_DELAY_SECONDS})")
+    parser.add_argument("--poll-timeout", type=int, default=POLL_TIMEOUT_SECONDS,
+                        help=f"Telegram long-poll timeout in seconds "
+                             f"(default {POLL_TIMEOUT_SECONDS})")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8080)),
+                        help="keep-alive HTTP port (default: $PORT or 8080)")
+    parser.add_argument("--no-http", action="store_true",
+                        help="do not open the keep-alive HTTP port")
+    parser.add_argument("--once", metavar="DD-MM-YYYY", default="",
+                        help="diagnostics: scan this date, print the report here, "
+                             "send nothing to Telegram, and exit")
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_arg_parser().parse_args(argv)
+
     try:
-        fx = fs.fixtures(0)
-        say("flashscore", len(fx) > 0, f"{len(fx)} matches today")
-        live = [r for r in fx if r.get("AB") == "2"]
-        say("in-play", True, f"{len(live)} live now")
-        if live:
-            say("live odds", bool(fs.odds(live[0]["AA"])),
-                f"{live[0].get('AE')} vs {live[0].get('AF')}")
-    except Exception as e:                                    # noqa: BLE001
-        say("flashscore", False, f"{type(e).__name__}: {e}")
-    print("\ntelegram")
-    tok = os.getenv("TELEGRAM_BOT_TOKEN")
-    say("token", bool(tok), "set" if tok else "NOT SET")
-    print()
-    print("ready \u2014 run:  python live_bot.py" if not issues
-          else f"{issues} problem(s)")
-    return 1 if issues else 0
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description="24/7 live scanner")
-    ap.add_argument("--once", action="store_true",
-                    help="one sweep, print to terminal (no telegram)")
-    ap.add_argument("--settle", action="store_true",
-                    help="score logged alerts against final results")
-    ap.add_argument("--doctor", action="store_true")
-    ap.add_argument("--limit", type=int, default=200)
-    ap.add_argument("--geo", default="NG")
-    ap.add_argument("--geo-sub", default="NGLA")
-    ap.add_argument("--token", default=os.getenv("TELEGRAM_BOT_TOKEN"))
-    ap.add_argument("-v", "--verbose", action="store_true")
-    args = ap.parse_args()
-
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s")
-    if args.doctor:
-        return doctor()
-    if args.settle:
-        print(settle(FS(geo=args.geo, geo_sub=args.geo_sub)))
-        return 0
-    if args.once:
-        fs = FS(geo=args.geo, geo_sub=args.geo_sub)
-        live = fs.live()
-        rows = [evaluate(fs, f) for f in live[:args.limit]]
-        judged = [r for r in rows if not r.skip]
-        print(f"{len(live)} in-play, {len(judged)} judgeable")
-        for s in sorted((x for x in judged if x.firing),
-                        key=lambda x: -x.edge_vig):
-            print()
-            print(bet_message(s))
-        near = sorted((x for x in judged if x.price),
-                      key=lambda x: -x.edge_vig)[:5]
-        for s in near:
-            print(f"  {s.home[:20]:<21} vs {s.away[:20]:<21} "
-                  f"edge {s.edge_vig:+6.1%}  min>={s.minute:>3.0f}  "
-                  f"xG {s.xg_share:.0%}")
-        return 0
-
-    if not args.token:
-        print("set TELEGRAM_BOT_TOKEN or pass --token", file=sys.stderr)
+        tz, tz_name, utc_label = resolve_timezone(args.timezone)
+    except BotError as exc:
+        log(f"ERROR: {exc}")
         return 2
 
-    sc = Scanner(args.token, geo=args.geo, geo_sub=args.geo_sub,
-                 limit=args.limit)
+    # ---- diagnostics mode: same pipeline, printed here, nothing sent ------
+    if args.once:
+        target_date = parse_date(args.once)
+        if target_date is None:
+            log(f"ERROR: invalid date '{args.once}'. Expected dd-mm-yyyy.")
+            return 2
+        outside = check_window(target_date, tz)
+        if outside:
+            log("ERROR: " + re.sub(r"</?b>", "", outside))
+            return 2
+        settings = {
+            "tz": tz, "tz_name": tz_name, "utc_label": utc_label,
+            "delay": max(0.0, args.delay), "include_started": args.include_started,
+        }
+        started = time.monotonic()
+        client = FeedClient(delay=settings["delay"])
+        matches = collect_matches_for_date(client, target_date, tz)
+        passed_by_n = collections.defaultdict(list)
+        skipped, candidates, cache = [], 0, {}
+        for match in matches:
+            label = f"{match.home_name} vs {match.away_name} ({match.league})"
+            if match.status_code != STATUS_SCHEDULED and not settings["include_started"]:
+                skipped.append((label, f"not a scheduled match (it is {match.status})"))
+                continue
+            table = standings_for_match(client, match, cache)
+            if not table:
+                skipped.append((label, "no league table available for this competition"))
+                continue
+            match.home_stats = find_team(table, match.home_id, match.home_name)
+            match.away_stats = find_team(table, match.away_id, match.away_name)
+            if not match.home_stats or not match.away_stats:
+                skipped.append((label, "team not in the table"))
+                continue
+            if applicable_n(match) is not None:
+                candidates += 1
+            for n in n_variants():
+                ok, _ = evaluate(match, n)
+                if ok:
+                    passed_by_n[n].append(match)
+        report = build_report(target_date, tz, tz_name, passed_by_n, len(matches),
+                              skipped, candidates, client.request_count,
+                              time.monotonic() - started, utc_label)
+        print(re.sub(r"</?(b|i|code)>", "", report))
+        return 0
 
-    def bye(*_):
-        print("\nstopping")
-        sc.stop.set()
-    signal.signal(signal.SIGINT, bye)
-    signal.signal(signal.SIGTERM, bye)
-    sc.run()
+    # ---- normal mode: run forever as a Telegram bot ----------------------
+    try:
+        token, fallback_chat_id = load_credentials(args)
+    except BotError as exc:
+        log(f"ERROR: {exc}")
+        return 2
+
+    restrict = (args.restrict_chat_id or "").strip() or fallback_chat_id
+    tg = TelegramAPI(token)
+    try:
+        username = tg.verify()
+    except BotError as exc:
+        log(f"ERROR: {exc}")
+        return 2
+
+    settings = {
+        "tz": tz, "tz_name": tz_name, "utc_label": utc_label,
+        "delay": max(0.0, args.delay),
+        "include_started": args.include_started,
+        "poll_timeout": max(1, args.poll_timeout),
+        "restrict_chat_id": restrict,
+    }
+
+    log("Flashscore daily pattern filter bot")
+    log(f"  Telegram:      @{username}")
+    log(f"  answering:     " + (f"only chat {restrict}" if restrict else "any chat"))
+    when = tz_name + (f", {utc_label}" if utc_label else "")
+    log(f"  day boundaries/kickoffs: {when}")
+    today = _dt.datetime.now(tz).date()
+    low = today - _dt.timedelta(days=MAX_DAY_OFFSET)
+    high = today + _dt.timedelta(days=MAX_DAY_OFFSET)
+    log(f"  scannable now: {low.strftime('%d-%m-%Y')} .. {high.strftime('%d-%m-%Y')}")
+    log(f"  filter:        for each N in {N_MIN}..{N_MAX}: N games each, "
+        f"N-point gap, goals sum >= {GOALS_MULTIPLIER}*N")
+
+    if not args.no_http:
+        start_health_server(args.port)
+
+    bot = FilterBot(tg, settings)
+    bot.start_worker()
+    tg.flush_stale_updates()
+
+    log("  listening for dates (dd-mm-yyyy). Press Ctrl+C / stop Run to quit.")
+    try:
+        bot.poll_forever()
+    except BotError as exc:
+        log(f"ERROR: {exc}")
+        bot.stop()
+        return 2
+    except KeyboardInterrupt:
+        log("  interrupted; shutting down")
+        bot.stop()
+        return 130
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        log("Interrupted.")
+        sys.exit(130)
+    except BotError as exc:
+        log(f"ERROR: {exc}")
+        sys.exit(2)
